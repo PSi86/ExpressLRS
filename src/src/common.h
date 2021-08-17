@@ -73,7 +73,7 @@ typedef enum
 
 typedef struct expresslrs_rf_pref_params_s
 {
-    int8_t index;
+    uint8_t index;
     expresslrs_RFrates_e enum_rate; // Max value of 16 since only 4 bits have been assigned in the sync package.
     int32_t RXsensitivity;          // expected RF sensitivity based on
     uint32_t TOA;                   // time on air in microseconds
@@ -90,7 +90,7 @@ typedef struct expresslrs_rf_pref_params_s
 #define RATE_DEFAULT 0
 typedef struct expresslrs_mod_settings_s
 {
-    int8_t index;
+    uint8_t index;
     expresslrs_RFrates_e enum_rate; // Max value of 16 since only 4 bits have been assigned in the sync package.
     SX127x_Bandwidth bw;
     SX127x_SpreadingFactor sf;
@@ -109,7 +109,7 @@ typedef struct expresslrs_mod_settings_s
 #define RATE_DEFAULT 0
 typedef struct expresslrs_mod_settings_s
 {
-    int8_t index;
+    uint8_t index;
     expresslrs_RFrates_e enum_rate; // Max value of 16 since only 4 bits have been assigned in the sync package.
     SX1280_RadioLoRaBandwidths_t bw;
     SX1280_RadioLoRaSpreadingFactors_t sf;
