@@ -752,7 +752,7 @@ void ICACHE_RAM_ATTR ProcessRFPacket()
                  telemBurstValid = false;
              }
 
-             if (ExpressLRS_currAirRate_Modparams->index != (expresslrs_tlm_ratio_e)indexIN)
+             if (ExpressLRS_currAirRate_Modparams->index != indexIN)
              { // change link parameters if required
                 ExpressLRS_nextAirRateIndex = indexIN;
              }
