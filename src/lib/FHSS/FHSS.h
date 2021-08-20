@@ -28,10 +28,10 @@
 
 extern volatile uint8_t FHSSptr;
 extern uint8_t NumOfFHSSfrequencies;
-extern int32_t FreqCorrection;
+extern int32_t RfFreqCorrection;
 
-#define FreqCorrectionMax ((int32_t)(100000/FREQ_STEP))
-#define FreqCorrectionMin ((int32_t)(-100000/FREQ_STEP))
+#define RfFreqCorrectionMax ((int32_t)(100000/FREQ_STEP))
+#define RfFreqCorrectionMin ((int32_t)(-100000/FREQ_STEP))
 
 #define FREQ_HZ_TO_REG_VAL(freq) ((uint32_t)((double)freq/(double)FREQ_STEP))
 
@@ -285,11 +285,11 @@ static inline uint8_t FHSSgetCurrIndex()
 
 static inline uint32_t GetInitialFreq()
 {
-    return FHSSfreqs[0] - FreqCorrection;
+    return FHSSfreqs[0] - RfFreqCorrection;
 }
 
 static inline uint32_t FHSSgetNextFreq()
 {
-    return FHSSfreqs[FHSSsequence[FHSSptr++]] - FreqCorrection;
+    return FHSSfreqs[FHSSsequence[FHSSptr++]] - RfFreqCorrection;
 }
 
