@@ -329,20 +329,20 @@ bool ICACHE_RAM_ATTR HandleSendTelemetryResponse()
     return true;
 }
 
-void ICACHE_RAM_ATTR HandleFreqCorr(bool value) // if value is FALSE it means the signal is comming in at a slightly 
+void ICACHE_RAM_ATTR HandleRfFreqCorr(bool value) // if value is FALSE it means the signal is comming in at a slightly 
     higher frequency than currently set
 {
-    //Serial.println(FreqCorrection);
+    //Serial.println(RfFreqCorrection);
     if (!value)
     {
-        if (FreqCorrection < FreqCorrectionMax)
+        if (RfFreqCorrection < RfFreqCorrectionMax)
         {
-            FreqCorrection += 1; //min freq step is ~ 61hz but don't forget we use FREQ_HZ_TO_REG_VAL so the units here are not hz!
+            RfFreqCorrection += 1; //min freq step is ~ 61hz but don't forget we use FREQ_HZ_TO_REG_VAL so the units here are not hz!
         }
         else
         {
-            FreqCorrection = FreqCorrectionMax;
-            FreqCorrection = 0; //reset because something went wrong
+            RfFreqCorrection = RfFreqCorrectionMax;
+            RfFreqCorrection = 0; //reset because something went wrong
 #ifndef DEBUG_SUPPRESS
             Serial.println("Max pos reasontable freq offset correction limit reached!");
 #endif
@@ -350,14 +350,14 @@ void ICACHE_RAM_ATTR HandleFreqCorr(bool value) // if value is FALSE it means th
     }
     else
     {
-        if (FreqCorrection > FreqCorrectionMin)
+        if (RfFreqCorrection > RfFreqCorrectionMin)
         {
-            FreqCorrection -= 1; //min freq step is ~ 61hz
+            RfFreqCorrection -= 1; //min freq step is ~ 61hz
         }
         else
         {
-            FreqCorrection = FreqCorrectionMin;
-            FreqCorrection = 0; //reset because something went wrong
+            RfFreqCorrection = RfFreqCorrectionMin;
+            RfFreqCorrection = 0; //reset because something went wrong
 #ifndef DEBUG_SUPPRESS
             Serial.println("Max neg reasontable freq offset correction limit reached!");
 #endif
@@ -375,7 +375,7 @@ void ICACHE_RAM_ATTR updatePhaseLock()
         Offset = LPF_Offset.update(RawOffset);
         OffsetDx = LPF_OffsetDx.update(RawOffset - prevRawOffset);
 
-        if (RXtimerState == tim_locked && LQCalc.currentIsSet())
+        if (RXtimerState == tim_locked && LQCalc.currentIsSet()) // only update timer frequency if we have a stable sync to the external osc
         {
             if (NonceRX % 8 == 0) //limit rate of freq offset adjustment slightly
             {
@@ -392,11 +392,11 @@ void ICACHE_RAM_ATTR updatePhaseLock()
 
         if (connectionState != connected)
         {
-            hwTimer.phaseShift(RawOffset >> 1);
+            hwTimer.phaseShift(RawOffset >> 1); // divided by 2, RawOffset is quicker changing than LPF'ed Offset variable
         }
         else
         {
-            hwTimer.phaseShift(Offset >> 2);
+            hwTimer.phaseShift(Offset >> 2); // divided by 4; 
         }
 
         prevOffset = Offset;
@@ -512,8 +512,8 @@ void ICACHE_RAM_ATTR HWtimerCallbackTock()
     #if !defined(Regulatory_Domain_ISM_2400)
     if (!didFHSS && !tlmSent && LQCalc.currentIsSet())
     {
-       // HandleFreqCorr(Radio.GetFrequencyErrorbool());      // Adjusts FreqCorrection for RX freq offset
-       // Radio.SetPPMoffsetReg(FreqCorrection);
+       // HandleRfFreqCorr(Radio.GetFrequencyErrorbool());      // Adjusts RfFreqCorrection for RX freq offset
+       // Radio.SetPPMoffsetReg(RfFreqCorrection);
     }
     #else
         (void)didFHSS;
@@ -531,7 +531,7 @@ void ICACHE_RAM_ATTR HWtimerCallbackTock()
 
 void LostConnection()
 {
-    Serial.print(F("lost conn fc=")); Serial.print(FreqCorrection, DEC);
+    Serial.print(F("lost conn fc=")); Serial.print(RfFreqCorrection, DEC);
     Serial.print(F(" fo=")); Serial.println(hwTimer.FreqOffset, DEC);
 
     RFmodeCycleMultiplier = 1;
@@ -539,7 +539,7 @@ void LostConnection()
     connectionState = disconnected; //set lost connection
     RXtimerState = tim_disconnected;
     hwTimer.resetFreqOffset();
-    FreqCorrection = 0;
+    RfFreqCorrection = 0;
     #if !defined(Regulatory_Domain_ISM_2400)
     Radio.SetPPMoffsetReg(0);
     #endif
@@ -584,7 +584,7 @@ void ICACHE_RAM_ATTR TentativeConnection()
     connectionState = tentative;
     RXtimerState = tim_disconnected;
     Serial.println("tentative conn");
-    FreqCorrection = 0;
+    RfFreqCorrection = 0;
     Offset = 0;
     prevOffset = 0;
     LPF_Offset.init(0);
