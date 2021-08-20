@@ -683,7 +683,7 @@ void ICACHE_RAM_ATTR ProcessRFPacket()
     {
     case RC_DATA_PACKET: //Standard RC Data Packet
         UnpackChannelData(Radio.RXdataBuffer, &crsf);
-        if (modeSupportsTelemetry) { // HYBRID8
+        if (modeSupportsTelemetry && ExpressLRS_currAirRate_Modparams->TLMinterval != TLM_RATIO_NO_TLM) { // HYBRID8
             telemetryConfirmValue = Radio.RXdataBuffer[6] & (1 << 7);
             TelemetrySender.ConfirmCurrentPayload(telemetryConfirmValue);
         }
@@ -1331,7 +1331,7 @@ void loop()
         }
     }
 
-    if (modeSupportsTelemetry) {
+    if (modeSupportsTelemetry && ExpressLRS_currAirRate_Modparams->TLMinterval != TLM_RATIO_NO_TLM) {
         uint8_t *nextPayload = 0;
         uint8_t nextPlayloadSize = 0;
         if (!TelemetrySender.IsActive() && telemetry.GetNextPayload(&nextPlayloadSize, &nextPayload))
