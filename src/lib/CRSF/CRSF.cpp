@@ -36,10 +36,13 @@ void (*CRSF::disconnected)() = &nullCallback; // called when CRSF stream is lost
 void (*CRSF::connected)() = &nullCallback;    // called when CRSF stream is regained
 
 void (*CRSF::RecvParameterUpdate)() = &nullCallback; // called when recv parameter update req, ie from LUA
+void (*CRSF::RecvModelUpdate)() = &nullCallback; // called when model id cahnges, ie command from Radio
 
 /// UART Handling ///
 uint32_t CRSF::GoodPktsCountResult = 0;
 uint32_t CRSF::BadPktsCountResult = 0;
+
+bool CRSF::hasEverConnected = false;
 
 volatile uint8_t CRSF::SerialInPacketLen = 0; // length of the CRSF packet as measured
 volatile uint8_t CRSF::SerialInPacketPtr = 0; // index where we are reading/writing
@@ -52,7 +55,10 @@ volatile inBuffer_U CRSF::inBuffer;
 uint8_t CRSF::currentSwitches[N_SWITCHES] = {0};
 uint8_t CRSF::sentSwitches[N_SWITCHES] = {0};
 
+uint8_t CRSF::nextSwitchFirstIndex = 0;
 uint8_t CRSF::nextSwitchIndex = 0; // for round-robin sequential switches
+
+uint8_t CRSF::modelId = 0;
 
 volatile uint8_t CRSF::ParameterUpdateData[3] = {0};
 volatile bool CRSF::elrsLUAmode = false;
@@ -114,20 +120,29 @@ void CRSF::Begin()
 #elif defined(PLATFORM_STM32)
     Serial.println("Start STM32 R9M TX CRSF UART");
 
+    CRSF::Port.setTx(GPIO_PIN_RCSIGNAL_TX);
+    CRSF::Port.setRx(GPIO_PIN_RCSIGNAL_RX);
+
     #if defined(GPIO_PIN_BUFFER_OE) && (GPIO_PIN_BUFFER_OE != UNDEF_PIN)
     pinMode(GPIO_PIN_BUFFER_OE, OUTPUT);
     digitalWrite(GPIO_PIN_BUFFER_OE, LOW ^ GPIO_PIN_BUFFER_OE_INVERTED); // RX mode default
+    #elif (GPIO_PIN_RCSIGNAL_TX == GPIO_PIN_RCSIGNAL_RX)
+    CRSF::Port.setHalfDuplex();
     #endif
 
-    CRSF::Port.setTx(GPIO_PIN_RCSIGNAL_TX);
-    CRSF::Port.setRx(GPIO_PIN_RCSIGNAL_RX);
     CRSF::Port.begin(CRSF_OPENTX_FAST_BAUDRATE);
 
 #if defined(TARGET_TX_GHOST)
     USART1->CR1 &= ~USART_CR1_UE;
     USART1->CR3 |= USART_CR3_HDSEL;
-    USART1->CR2 |= USART_CR2_RXINV | USART_CR2_TXINV | USART_CR2_SWAP; //inv
+    USART1->CR2 |= USART_CR2_RXINV | USART_CR2_TXINV | USART_CR2_SWAP; //inverted/swapped
     USART1->CR1 |= USART_CR1_UE;
+#endif
+#if defined(TARGET_TX_FM30_MINI)
+    LL_GPIO_SetPinPull(GPIOA, GPIO_PIN_2, LL_GPIO_PULL_DOWN); // default is PULLUP
+    USART2->CR1 &= ~USART_CR1_UE;
+    USART2->CR2 |= USART_CR2_RXINV | USART_CR2_TXINV; //inverted
+    USART2->CR1 |= USART_CR1_UE;
 #endif
     Serial.println("STM32 CRSF UART LISTEN TASK STARTED");
     CRSF::Port.flush();
@@ -184,11 +199,7 @@ void CRSF::flush_port_input(void)
  */
 uint8_t ICACHE_RAM_ATTR CRSF::getNextSwitchIndex()
 {
-    int firstSwitch = 0; // sequential switches includes switch 0
-
-#if defined HYBRID_SWITCHES_8
-    firstSwitch = 1; // skip 0 since it is sent on every packet
-#endif
+    int firstSwitch = nextSwitchFirstIndex;
 
     // look for a changed switch
     int i;
@@ -206,16 +217,17 @@ uint8_t ICACHE_RAM_ATTR CRSF::getNextSwitchIndex()
     // keep track of which switch to send next if there are no changed switches
     // during the next call.
     nextSwitchIndex = (i + 1) % 8;
-
-#ifdef HYBRID_SWITCHES_8
-    // for hydrid switches 0 is sent on every packet, skip it in round-robin
     if (nextSwitchIndex == 0)
     {
-        nextSwitchIndex = 1;
+        nextSwitchIndex = nextSwitchFirstIndex;
     }
-#endif
 
     return i;
+}
+
+void ICACHE_RAM_ATTR CRSF::setNextSwitchFirstIndex(int firstSwitchIndex)
+{
+    nextSwitchFirstIndex = firstSwitchIndex;
 }
 
 /**
@@ -684,6 +696,7 @@ bool ICACHE_RAM_ATTR CRSF::ProcessPacket()
         LPF_OPENTX_SYNC_MARGIN.init(0);
         LPF_OPENTX_SYNC_OFFSET.init(0);
 #endif // FEATURE_OPENTX_SYNC_AUTOTUNE
+        hasEverConnected = true;
         connected();
     }
     
@@ -711,11 +724,17 @@ bool ICACHE_RAM_ATTR CRSF::ProcessPacket()
             } else {
                 elrsLUAmode = false;
             }
+            if (packetType == CRSF_FRAMETYPE_COMMAND && 
+                SerialInBuffer[5] == SUBCOMMAND_CRSF &&
+                SerialInBuffer[6] == COMMAND_MODEL_SELECT_ID) {
+                    modelId = SerialInBuffer[7];
+                    RecvModelUpdate();
+                    return true;
+            }
             ParameterUpdateData[0] = packetType;
             ParameterUpdateData[1] = SerialInBuffer[5];
             ParameterUpdateData[2] = SerialInBuffer[6];
             RecvParameterUpdate();
-            
             return true;
         }
         Serial.println("Got Other Packet");        
@@ -973,6 +992,8 @@ void ICACHE_RAM_ATTR CRSF::duplex_set_RX()
     #endif
 #elif defined(GPIO_PIN_BUFFER_OE) && (GPIO_PIN_BUFFER_OE != UNDEF_PIN)
     digitalWrite(GPIO_PIN_BUFFER_OE, LOW ^ GPIO_PIN_BUFFER_OE_INVERTED);
+#elif (GPIO_PIN_RCSIGNAL_TX == GPIO_PIN_RCSIGNAL_RX)
+    CRSF::Port.enableHalfDuplexRx();
 #endif
 }
 
@@ -991,6 +1012,8 @@ void ICACHE_RAM_ATTR CRSF::duplex_set_TX()
     #endif
 #elif defined(GPIO_PIN_BUFFER_OE) && (GPIO_PIN_BUFFER_OE != UNDEF_PIN)
     digitalWrite(GPIO_PIN_BUFFER_OE, HIGH ^ GPIO_PIN_BUFFER_OE_INVERTED);
+#elif (GPIO_PIN_RCSIGNAL_TX == GPIO_PIN_RCSIGNAL_RX)
+    // writing to the port switches the mode
 #endif
 }
 
@@ -1033,8 +1056,14 @@ bool CRSF::UARTwdt()
             #if defined(TARGET_TX_GHOST)
             USART1->CR1 &= ~USART_CR1_UE;
             USART1->CR3 |= USART_CR3_HDSEL;
-            USART1->CR2 |= USART_CR2_RXINV | USART_CR2_TXINV | USART_CR2_SWAP; //inv
+            USART1->CR2 |= USART_CR2_RXINV | USART_CR2_TXINV | USART_CR2_SWAP; //inverted/swapped
             USART1->CR1 |= USART_CR1_UE;
+            #endif
+            #if defined(TARGET_TX_FM30_MINI)
+            LL_GPIO_SetPinPull(GPIOA, GPIO_PIN_2, LL_GPIO_PULL_DOWN); // default is PULLUP
+            USART2->CR1 &= ~USART_CR1_UE;
+            USART2->CR2 |= USART_CR2_RXINV | USART_CR2_TXINV; //inverted
+            USART2->CR1 |= USART_CR1_UE;
             #endif
 #endif
             UARTcurrentBaud = UARTrequestedBaud;

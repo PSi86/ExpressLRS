@@ -124,7 +124,7 @@ def get_git_version():
             except ImportError:
                 git = None
 
-    sha = None
+    ver = "unknown"
     if git:
         try:
             git_repo = git.Repo(
@@ -154,9 +154,6 @@ print("build flags: %s" % env['BUILD_FLAGS'])
 
 if not fnmatch.filter(env['BUILD_FLAGS'], '*-DRegulatory_Domain*'):
     print_error('Please define a Regulatory_Domain in user_defines.txt')
-
-if fnmatch.filter(env['BUILD_FLAGS'], '*-DENABLE_TELEMETRY*') and not fnmatch.filter(env['BUILD_FLAGS'], '*-DHYBRID_SWITCHES_8*'):
-    print_error('Telemetry requires HYBRID_SWITCHES_8')
 
 if fnmatch.filter(env['BUILD_FLAGS'], '*PLATFORM_ESP32*'):
     sys.stdout.write("\u001b[32mBuilding for ESP32 Platform\n")

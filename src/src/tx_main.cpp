@@ -27,9 +27,7 @@ SX1280Driver Radio;
 #include "LQCALC.h"
 #include "LowPassFilter.h"
 #include "telemetry_protocol.h"
-#ifdef ENABLE_TELEMETRY
 #include "stubborn_receiver.h"
-#endif
 #include "stubborn_sender.h"
 
 #ifdef HAS_OLED
@@ -40,7 +38,6 @@ SX1280Driver Radio;
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 #endif
-
 #ifdef PLATFORM_ESP32
 #include "ESP32_WebUpdate.h"
 #endif
@@ -73,10 +70,13 @@ OLED OLED;
 char commitStr[7] = {LATEST_COMMIT , 0};
 #endif
 
+static void ICACHE_RAM_ATTR (*GenerateChannelData)(volatile uint8_t* Buffer, CRSF *crsf, bool TelemetryStatus) = GenerateChannelDataHybridSwitch8;
+
 volatile uint8_t NonceTX;
 
+#ifdef PLATFORM_ESP32
 bool webUpdateMode = false;
-
+#endif
 //// MSP Data Handling ///////
 bool NextPacketIsMspData = false;  // if true the next packet will contain the msp data
 
@@ -97,6 +97,7 @@ LQCALC<10> LQCalc;
 LPF LPD_DownlinkLQ(1);
 
 volatile bool busyTransmitting;
+volatile bool UpdateModelReq = false;
 uint32_t HWtimerPauseDuration = 0;
 
 char luaBadGoodString[10] = {"xxxxx/yyy"};
@@ -111,9 +112,7 @@ void EnterBindingMode();
 void ExitBindingMode();
 void SendUIDOverMSP();
 
-#ifdef ENABLE_TELEMETRY
 StubbornReceiver TelemetryReceiver(ELRS_TELEMETRY_MAX_PACKAGES);
-#endif
 StubbornSender MspSender(ELRS_MSP_MAX_PACKAGES);
 uint8_t CRSFinBuffer[CRSF_MAX_PACKET_LEN+1];
 // MSP packet handling function defs
@@ -139,31 +138,42 @@ static bool dynamic_power_updated;
 void DynamicPower_Update()
 {
   #ifdef USE_DYNAMIC_POWER
+
+  // =============  DYNAMIC_POWER_BOOST: Switch-triggered power boost up ==============
+  #ifdef DYNAMIC_POWER_BOOST
+    // if a user selected to disable dynamic power (ch16)
+    if(CRSF_to_BIT(crsf.ChannelDataIn[DYNAMIC_POWER_BOOST])) {
+      POWERMGNT.setPower((PowerLevels_e)config.GetPower(crsf.getModelID()));
+      // POWERMGNT.setPower((PowerLevels_e)MaxPower);    // if you want to make the power to the aboslute maximum of a module, use this line.
+      return;
+    }
+  #endif  // DYNAMIC_POWER_BOOST
+
   // if telemetry is not arrived, quick return.
   if (!dynamic_power_updated)
     return;
   dynamic_power_updated = false;
 
-  // =============  LQ-based power boost up ==============  
-  // Quick boost up of power when detected any emergency LQ drops. 
+  // =============  LQ-based power boost up ==============
+  // Quick boost up of power when detected any emergency LQ drops.
   // It should be useful for bando or sudden lost of LoS cases.
   int32_t lq_current = crsf.LinkStatistics.uplink_Link_quality;
   int32_t lq_diff = (dynamic_power_avg_lq>>16) - lq_current;
   // if LQ drops quickly (DYNAMIC_POWER_BOOST_LQ_THRESHOLD) or critically low below DYNAMIC_POWER_BOOST_LQ_MIN, immediately boost to the configured max power.
   if(lq_diff >= DYNAMIC_POWER_BOOST_LQ_THRESHOLD || lq_current <= DYNAMIC_POWER_BOOST_LQ_MIN)
   {
-      POWERMGNT.setPower((PowerLevels_e)config.GetPower());
+      POWERMGNT.setPower((PowerLevels_e)config.GetPower(crsf.getModelID()));
       // restart the rssi sampling after a boost up
       dynamic_power_rssi_sum = 0;
       dynamic_power_rssi_n = 0;
   }
   // Moving average calculation, multiplied by 2^16 for avoiding (costly) floating point operation, while maintaining some fraction parts.
-  dynamic_power_avg_lq = ((int32_t)(DYNAMIC_POWER_MOVING_AVG_K - 1) * dynamic_power_avg_lq + (lq_current<<16)) / DYNAMIC_POWER_MOVING_AVG_K;   
+  dynamic_power_avg_lq = ((int32_t)(DYNAMIC_POWER_MOVING_AVG_K - 1) * dynamic_power_avg_lq + (lq_current<<16)) / DYNAMIC_POWER_MOVING_AVG_K;
 
   // =============  RSSI-based power adjustment ==============
   // It is working slowly, suitable for a general long-range flights.
-  
-  // Get the RSSI from the selected antenna.  
+
+  // Get the RSSI from the selected antenna.
   int8_t rssi = (crsf.LinkStatistics.active_antenna == 0)? crsf.LinkStatistics.uplink_RSSI_1: crsf.LinkStatistics.uplink_RSSI_2;
 
   dynamic_power_rssi_sum += rssi;
@@ -179,19 +189,8 @@ void DynamicPower_Update()
   int32_t rssi_inc_threshold = expected_RXsensitivity + 15;
   int32_t rssi_dec_threshold = expected_RXsensitivity + 30;
 
-  // Serial.print("Dynamic power: ");
-  // Serial.print(avg_rssi); 
-  // Serial.print(", "); 
-  // Serial.println(dynamic_power_rssi_n);
-
-  // Serial.print("CurrentPower: ");
-  // Serial.println(POWERMGNT.currPower());
-
-  // Serial.print("SetPower: ");
-  // Serial.println((PowerLevels_e)config.GetPower());
-
   // increase power only up to the set power from the LUA script
-  if (avg_rssi < rssi_inc_threshold && POWERMGNT.currPower() < (PowerLevels_e)config.GetPower()) {
+  if (avg_rssi < rssi_inc_threshold && POWERMGNT.currPower() < (PowerLevels_e)config.GetPower(crsf.getModelID())) {
     // Serial.print("Power increase");
     POWERMGNT.incPower();
   }
@@ -203,13 +202,15 @@ void DynamicPower_Update()
   dynamic_power_rssi_sum = 0;
   dynamic_power_rssi_n = 0;
 
-  // Serial.print(crsf.LinkStatistics.uplink_Link_quality);
-  // Serial.print("/");
-  // Serial.print(dynamic_power_avg_lq>>16);
-  // Serial.print("/");
-  // Serial.println(lq_diff);
-  #endif    
+  #endif  // USE_DYNAMIC_POWER
 }
+
+#if defined(NO_SYNC_ON_ARM)
+static bool ICACHE_RAM_ATTR IsArmed()
+{
+   return CRSF_to_BIT(crsf.ChannelDataIn[AUX1]);
+}
+#endif
 
 void ICACHE_RAM_ATTR ProcessTLMpacket()
 {
@@ -220,7 +221,7 @@ void ICACHE_RAM_ATTR ProcessTLMpacket()
 
   uint8_t type = Radio.RXdataBuffer[0] & TLM_PACKET;
   uint8_t TLMheader = Radio.RXdataBuffer[1];
-  
+
   if ((inCRC != calculatedCRC))
   {
 #ifndef DEBUG_SUPPRESS
@@ -273,33 +274,31 @@ void ICACHE_RAM_ATTR ProcessTLMpacket()
             #endif
             break;
 
-        #ifdef ENABLE_TELEMETRY
         case ELRS_TELEMETRY_TYPE_DATA:
             TelemetryReceiver.ReceiveData(TLMheader >> ELRS_TELEMETRY_SHIFT, Radio.RXdataBuffer + 2);
             break;
-        #endif
     }
 }
 
 void ICACHE_RAM_ATTR GenerateSyncPacketData()
 {
-#ifdef HYBRID_SWITCHES_8
-  const uint8_t SwitchEncMode = 0b01;
-#else
-  const uint8_t SwitchEncMode = 0b00;
-#endif
+  const uint8_t SwitchEncMode = config.GetSwitchMode(crsf.getModelID()) & 0b11;
   uint8_t Index;
-  uint8_t TLMrate;
   if (syncSpamCounter)
   {
-    Index = (config.GetRate() & 0b11);
-    TLMrate = (config.GetTlm() & 0b111);
+    Index = (config.GetRate(crsf.getModelID()) & 0b11);
   }
   else
   {
     Index = (ExpressLRS_currAirRate_Modparams->index & 0b11);
-    TLMrate = (ExpressLRS_currAirRate_Modparams->TLMinterval & 0b111);
   }
+
+  // TLM ratio is boosted for one sync cycle when the MspSender goes active
+  if (MspSender.IsActive())
+    ExpressLRS_currAirRate_Modparams->TLMinterval = TLM_RATIO_1_2;
+  else
+    ExpressLRS_currAirRate_Modparams->TLMinterval = (expresslrs_tlm_ratio_e)config.GetTlm(crsf.getModelID());
+  uint8_t TLMrate = (ExpressLRS_currAirRate_Modparams->TLMinterval & 0b111);
 
   Radio.TXdataBuffer[0] = SYNC_PACKET & 0b11;
   Radio.TXdataBuffer[1] = FHSSgetCurrIndex();
@@ -308,10 +307,35 @@ void ICACHE_RAM_ATTR GenerateSyncPacketData()
   Radio.TXdataBuffer[4] = UID[3];
   Radio.TXdataBuffer[5] = UID[4];
   Radio.TXdataBuffer[6] = UID[5];
+  if (!InBindingMode && config.GetModelMatch(crsf.getModelID())) {
+    Radio.TXdataBuffer[6] ^= crsf.getModelID();
+  }
 
   SyncPacketLastSent = millis();
   if (syncSpamCounter)
     --syncSpamCounter;
+}
+
+void SetSwitchMode(uint32_t switchMode)
+{
+  switch(switchMode) {
+    case 0b00:
+      GenerateChannelData = GenerateChannelData10bit;
+      crsf.setNextSwitchFirstIndex(0);
+      break;
+    case 0b01:
+      GenerateChannelData = GenerateChannelDataHybridSwitch8;
+      crsf.setNextSwitchFirstIndex(1);
+      break;
+    case 0b10:
+      // Future switch-mode expansion
+    case 0b11:
+      // Future switch-mode expansion
+    default:
+      GenerateChannelData = GenerateChannelDataHybridSwitch8;
+      crsf.setNextSwitchFirstIndex(1);
+      break;
+  }
 }
 
 void ICACHE_RAM_ATTR SetRFLinkRate(uint8_t index) // Set speed of RF link (hz)
@@ -398,7 +422,7 @@ void ICACHE_RAM_ATTR SendRCdataToRF()
 
 #if defined(NO_SYNC_ON_ARM)
   SyncInterval = 250;
-  bool skipSync = (bool)CRSF_to_BIT(crsf.ChannelDataIn[AUX1]);
+  bool skipSync = IsArmed();
 #else
   SyncInterval = (connectionState == connected) ? ExpressLRS_currAirRate_RFperfParams->SyncPktIntervalConnected : ExpressLRS_currAirRate_RFperfParams->SyncPktIntervalDisconnected;
   bool skipSync = false;
@@ -432,16 +456,16 @@ void ICACHE_RAM_ATTR SendRCdataToRF()
       NextPacketIsMspData = false;
       // counter can be increased even for normal msp messages since it's reset if a real bind message should be sent
       BindingSendCount++;
+      // If the telemetry ratio isn't already 1:2, send a sync packet to boost it
+      // to add bandwidth for the reply
+      if (ExpressLRS_currAirRate_Modparams->TLMinterval != TLM_RATIO_1_2)
+        syncSpamCounter = 1;
     }
     else
     {
       // always enable msp after a channel package since the slot is only used if MspSender has data to send
       NextPacketIsMspData = true;
-      #ifdef ENABLE_TELEMETRY
       GenerateChannelData(Radio.TXdataBuffer, &crsf, TelemetryReceiver.GetCurrentConfirm());
-      #else
-      GenerateChannelData(Radio.TXdataBuffer, &crsf);
-      #endif
     }
   }
 
@@ -489,10 +513,10 @@ void registerLuaParameters() {
         Serial.print("Request AirRate: ");
         Serial.println(arg);
       #endif
-        config.SetRate(arg);
+        config.SetRate(crsf.getModelID(), arg);
       #if defined(HAS_OLED)
         OLED.updateScreen(OLED.getPowerString((PowerLevels_e)POWERMGNT.currPower()),
-                          OLED.getRateString((expresslrs_RFrates_e)arg), 
+                          OLED.getRateString((expresslrs_RFrates_e)arg),
                           OLED.getTLMRatioString((expresslrs_tlm_ratio_e)(ExpressLRS_currAirRate_Modparams->TLMinterval)), commitStr);
       #endif
     }
@@ -504,10 +528,10 @@ void registerLuaParameters() {
         Serial.print("Request TLM interval: ");
         Serial.println(arg);
       #endif
-        config.SetTlm((expresslrs_tlm_ratio_e)arg);
+        config.SetTlm(crsf.getModelID(), (expresslrs_tlm_ratio_e)arg);
       #if defined(HAS_OLED)
         OLED.updateScreen(OLED.getPowerString((PowerLevels_e)POWERMGNT.currPower()),
-                          OLED.getRateString((expresslrs_RFrates_e)ExpressLRS_currAirRate_Modparams->enum_rate), 
+                          OLED.getRateString((expresslrs_RFrates_e)ExpressLRS_currAirRate_Modparams->enum_rate),
                           OLED.getTLMRatioString((expresslrs_tlm_ratio_e)arg), commitStr);
       #endif
     }
@@ -518,13 +542,37 @@ void registerLuaParameters() {
       Serial.print("Request Power: ");
       Serial.println(newPower, DEC);
     #endif
-      config.SetPower(newPower < MaxPower ? newPower : MaxPower);
-      
+      config.SetPower(crsf.getModelID(), newPower < MaxPower ? newPower : MaxPower);
     #if defined(HAS_OLED)
       OLED.updateScreen(OLED.getPowerString((PowerLevels_e)arg),
-                        OLED.getRateString((expresslrs_RFrates_e)ExpressLRS_currAirRate_Modparams->enum_rate), 
+                        OLED.getRateString((expresslrs_RFrates_e)ExpressLRS_currAirRate_Modparams->enum_rate),
                         OLED.getTLMRatioString((expresslrs_tlm_ratio_e)ExpressLRS_currAirRate_Modparams->TLMinterval), commitStr);
     #endif
+  });
+  registerLUAParameter(&luaSwitch, [](uint8_t id, uint8_t arg){
+    Serial.print("Request Switch Mode: ");
+    uint32_t newSwitchMode = crsf.ParameterUpdateData[2] & 0b11;
+    Serial.println(newSwitchMode, DEC);
+    config.SetSwitchMode(crsf.getModelID(), newSwitchMode);
+    SetSwitchMode(newSwitchMode);
+  });
+  registerLUAParameter(&luaModelMatch, [](uint8_t id, uint8_t arg){
+    Serial.print("Request Model Match: ");
+    bool newModelMatch = crsf.ParameterUpdateData[2] & 0b1;
+    Serial.println(newModelMatch, DEC);
+    config.SetModelMatch(crsf.getModelID(), newModelMatch);
+  });
+  registerLUAParameter(&luaSetRXModel, [](uint8_t id, uint8_t arg){
+    Serial.print("Request Set RX Model: ");
+    uint8_t rxModel = crsf.ParameterUpdateData[2];
+    Serial.println(rxModel, DEC);
+    mspPacket_t msp;
+    msp.reset();
+    msp.makeCommand();
+    msp.function = MSP_SET_RX_CONFIG;
+    msp.addByte(MSP_ELRS_MODEL_ID);
+    msp.addByte(rxModel);
+    crsf.AddMspMessage(&msp);
   });
   registerLUAParameter(&luaBind, [](uint8_t id, uint8_t arg){
     if (arg == 1)
@@ -544,38 +592,34 @@ void registerLuaParameters() {
       ExitBindingMode();
     }
   });
+#ifdef PLATFORM_ESP32
   registerLUAParameter(&luaWebUpdate, [](uint8_t id, uint8_t arg){
     if (arg == 1)
     {
-#ifdef PLATFORM_ESP32
       webUpdateMode = true;
 #ifndef DEBUG_SUPPRESS
       Serial.println("Wifi Update Mode Requested!");
 #endif
       BeginWebUpdate();
-#else
-      webUpdateMode = false;
 #ifndef DEBUG_SUPPRESS
       Serial.println("Wifi Update Mode Requested but not supported on this platform!");
-#endif
 #endif
     } else if(arg == 6){
         sendLuaFieldCrsf(id,0);
     }
   });
+#endif
   registerLUAParameter(&luaInfo);
   registerLUAParameter(&luaELRSversion);
 }
 
 void resetLuaParams(){
-  setLuaTextSelectionValue(&luaAirRate,(uint8_t)(ExpressLRS_currAirRate_Modparams->index));
-  setLuaTextSelectionValue(&luaTlmRate,(uint8_t)(ExpressLRS_currAirRate_Modparams->TLMinterval));
-  
-  #ifdef USE_DYNAMIC_POWER
-  setLuaTextSelectionValue(&luaPower,(uint8_t)(config.GetPower()));
-  #else
-  setLuaTextSelectionValue(&luaPower,(uint8_t)(POWERMGNT.currPower()));//value
-  #endif
+  setLuaTextSelectionValue(&luaAirRate,(uint8_t)config.GetRate(crsf.getModelID()));
+  setLuaTextSelectionValue(&luaTlmRate,(uint8_t)config.GetTlm(crsf.getModelID()));
+  setLuaTextSelectionValue(&luaPower,(uint8_t)(config.GetPower(crsf.getModelID())));
+  setLuaTextSelectionValue(&luaSwitch,(uint8_t)(config.GetSwitchMode(crsf.getModelID())));
+  setLuaTextSelectionValue(&luaModelMatch,(uint8_t)(config.GetModelMatch(crsf.getModelID())));
+  setLuaUint8Value(&luaSetRXModel,(uint8_t)0);
 }
 
 void updateLUApacketCount(){
@@ -616,11 +660,25 @@ void UARTconnected()
   pinMode(GPIO_PIN_BUZZER, INPUT);
   #endif
     delay(200);
+
   hwTimer.resume();
+}
+
+static void ChangeRadioParams()
+{
+  SetRFLinkRate(config.GetRate(crsf.getModelID()));
+  POWERMGNT.setPower((PowerLevels_e)config.GetPower(crsf.getModelID()));
+  SetSwitchMode(config.GetSwitchMode(crsf.getModelID()));
+  // TLM interval is set on the next SYNC packet
 }
 
 void HandleUpdateParameter()
 {
+  if (UpdateModelReq == true)
+  {
+    ChangeRadioParams();
+    UpdateModelReq = false;
+  }
   bool updated = luaHandleUpdateParameter();
   if (updated && config.IsModified())
   {
@@ -628,11 +686,14 @@ void HandleUpdateParameter()
   }
 }
 
+void ICACHE_RAM_ATTR ModelUpdateReq()
+{
+  UpdateModelReq = true;
+}
+
 static void ConfigChangeCommit()
 {
-  SetRFLinkRate(config.GetRate());
-  ExpressLRS_currAirRate_Modparams->TLMinterval = (expresslrs_tlm_ratio_e)config.GetTlm();
-  POWERMGNT.setPower((PowerLevels_e)config.GetPower());
+  ChangeRadioParams();
 
   // Write the uncommitted eeprom values
 #ifndef DEBUG_SUPPRESS
@@ -660,7 +721,7 @@ static void CheckConfigChangePending()
     // sync packet, before the tick ISR. Because the EEPROM write takes so long and disables
     // interrupts, FastForward the timer
     const uint32_t EEPROM_WRITE_DURATION = 30000; // us, ~27ms is where it starts getting off by one
-    const uint32_t cycleInterval = get_elrs_airRateConfig(config.GetRate())->interval;
+    const uint32_t cycleInterval = get_elrs_airRateConfig(config.GetRate(crsf.getModelID()))->interval;
     // Total time needs to be at least DURATION, rounded up to next cycle
     uint32_t pauseCycles = (EEPROM_WRITE_DURATION + cycleInterval - 1) / cycleInterval;
     // Pause won't return until paused, and has just passed the tick ISR (but not fired)
@@ -783,6 +844,10 @@ void setup()
   pinMode(GPIO_PIN_UART1RX_INVERT, OUTPUT); // RX1 inverter (TX handled in CRSF)
   digitalWrite(GPIO_PIN_UART1RX_INVERT, HIGH);
 #endif
+#if defined(TARGET_TX_FM30_MINI)
+    pinMode(GPIO_PIN_UART1TX_INVERT, OUTPUT); // TX1 inverter used for debug
+    digitalWrite(GPIO_PIN_UART1TX_INVERT, LOW);
+#endif
 
 #if defined(TARGET_TX_BETAFPV_2400_V1) || defined(TARGET_TX_BETAFPV_900_V1)
   button.buttonTriplePress = &EnterBindingMode;
@@ -795,8 +860,7 @@ void setup()
   // UID[0..2] are OUI (organisationally unique identifier) and are not ESP32 unique.  Do not use!
 #endif // PLATFORM_ESP32
 
-  long macSeed = ((long)UID[2] << 24) + ((long)UID[3] << 16) + ((long)UID[4] << 8) + UID[5];
-  FHSSrandomiseFHSSsequence(macSeed);
+  FHSSrandomiseFHSSsequence(uidMacSeedGet());
 
   Radio.RXdoneCallback = &RXdoneISR;
   Radio.TXdoneCallback = &TXdoneISR;
@@ -804,6 +868,7 @@ void setup()
   crsf.connected = &UARTconnected; // it will auto init when it detects UART connection
   crsf.disconnected = &UARTdisconnected;
   crsf.RecvParameterUpdate = &luaParamUpdateReq;
+  crsf.RecvModelUpdate = &ModelUpdateReq;
   hwTimer.callbackTock = &timerCallbackNormal;
 #ifndef DEBUG_SUPPRESS
   Serial.println("ExpressLRS TX Module Booted...");
@@ -846,17 +911,13 @@ void setup()
     #endif // GPIO_PIN_LED_RED
     delay(1000);
   }
-  #ifdef ENABLE_TELEMETRY
   TelemetryReceiver.SetDataToReceive(sizeof(CRSFinBuffer), CRSFinBuffer, ELRS_TELEMETRY_BYTES_PER_CALL);
-  #endif
 
   POWERMGNT.init();
 
   // Set the pkt rate, TLM ratio, and power from the stored eeprom values
-  SetRFLinkRate(config.GetRate());
-  ExpressLRS_currAirRate_Modparams->TLMinterval = (expresslrs_tlm_ratio_e)config.GetTlm();
-  POWERMGNT.setPower((PowerLevels_e)config.GetPower());
-  
+  ChangeRadioParams();
+
   registerLuaParameters();
   registerLUAPopulateParams(updateLUApacketCount);
 
@@ -878,14 +939,23 @@ void loop()
   UpdateConnectDisconnectStatus(now);
   updateLEDs(now, connectionState, ExpressLRS_currAirRate_Modparams->index, POWERMGNT.currPower());
 
-  #if defined(PLATFORM_ESP32)
-    if (webUpdateMode)
-    {
-      HandleWebUpdate();
-      return;
-    }
-  #endif
+#ifdef PLATFORM_ESP32
+  //if webupdate was requested before or AUTO_WIFI_ON_INTERVAL has been elapsed but uart is not detected
+  //start webupdate, there might be wrong configuration flashed.
 
+  if(crsf.hasEverConnected == false && now > (AUTO_WIFI_ON_INTERVAL*1000)){
+#ifndef DEBUG_SUPPRESS
+  Serial.println("startup Check Failled")
+#endif
+    webUpdateMode = true;
+    BeginWebUpdate();
+  }
+  if (webUpdateMode)
+  {
+    HandleWebUpdate();
+    return;
+  }
+#endif
   HandleUpdateParameter();
   CheckConfigChangePending();
 
@@ -922,13 +992,11 @@ void loop()
   }
 
 
-  #ifdef ENABLE_TELEMETRY
   if (TelemetryReceiver.HasFinishedData())
   {
       crsf.sendTelemetryToTX(CRSFinBuffer);
       TelemetryReceiver.Unlock();
   }
-  #endif
 
   // Actual update of dynamic power is done here
   DynamicPower_Update();
@@ -1105,7 +1173,7 @@ void ExitBindingMode()
   InBindingMode = 0;
   setLuaCommandValue(&luaBind,InBindingMode);
   MspSender.ResetState();
-  SetRFLinkRate(config.GetRate()); //return to original rate
+  SetRFLinkRate(config.GetRate(crsf.getModelID())); //return to original rate
 
 #ifndef DEBUG_SUPPRESS
   Serial.println("Exiting binding mode");

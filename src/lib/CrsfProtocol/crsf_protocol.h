@@ -120,6 +120,14 @@ typedef enum
     CRSF_FRAMETYPE_MSP_WRITE = 0x7C, // write with 8 byte chunked binary (OpenTX outbound telemetry buffer limit)
 } crsf_frame_type_e;
 
+typedef enum {
+    SUBCOMMAND_CRSF = 0x10
+} crsf_command_e;
+
+typedef enum {
+    COMMAND_MODEL_SELECT_ID = 0x05
+} crsf_subcommand_e;
+
 enum {
     CRSF_FRAME_TX_MSP_FRAME_SIZE = 58,
     CRSF_FRAME_RX_MSP_FRAME_SIZE = 8,
@@ -293,7 +301,7 @@ typedef struct crsfPayloadLinkstatistics_s crsfLinkStatistics_t;
 
 // only 1st properties has the same type on all lua packet type.
 struct tagLuaProperties1{
-    const uint8_t id;
+    uint8_t id;
 //    uint8_t chunk; //chunk put in struct just to reserve the byte space, will be overwritten when sending
 //    uint8_t parent;
     const uint8_t type;
