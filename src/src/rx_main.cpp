@@ -329,7 +329,8 @@ bool ICACHE_RAM_ATTR HandleSendTelemetryResponse()
     return true;
 }
 
-void ICACHE_RAM_ATTR HandleFreqCorr(bool value)
+void ICACHE_RAM_ATTR HandleFreqCorr(bool value) // if value is FALSE it means the signal is comming in at a slightly 
+    higher frequency than currently set
 {
     //Serial.println(FreqCorrection);
     if (!value)
@@ -511,8 +512,8 @@ void ICACHE_RAM_ATTR HWtimerCallbackTock()
     #if !defined(Regulatory_Domain_ISM_2400)
     if (!didFHSS && !tlmSent && LQCalc.currentIsSet())
     {
-        HandleFreqCorr(Radio.GetFrequencyErrorbool());      // Adjusts FreqCorrection for RX freq offset
-        Radio.SetPPMoffsetReg(FreqCorrection);
+       // HandleFreqCorr(Radio.GetFrequencyErrorbool());      // Adjusts FreqCorrection for RX freq offset
+       // Radio.SetPPMoffsetReg(FreqCorrection);
     }
     #else
         (void)didFHSS;
