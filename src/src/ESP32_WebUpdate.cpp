@@ -250,12 +250,21 @@ static void startWifi() {
     config.SetPassword(home_wifi_password);
   }
   if (config.GetSSID()[0]==0) {
+    Serial.println("Changing to AP mode");
     changeTime = millis();
     changeMode = WIFI_AP;
+    wifiMode = WIFI_AP;
+    WiFi.mode(wifiMode);
+    WiFi.softAPConfig(apIP, apIP, netMsk);
+    WiFi.softAP(ssid, password);
+    WiFi.scanNetworks(true);
   } else {
     Serial.printf("Connecting to home network '%s'\n", config.GetSSID());
     changeTime = millis();
     changeMode = WIFI_STA;
+    wifiMode = WIFI_STA;
+    WiFi.mode(wifiMode);
+    WiFi.begin(config.GetSSID(), config.GetPassword());
   }
   laststatus = WL_DISCONNECTED;
 }
@@ -302,7 +311,7 @@ void BeginWebUpdate()
               server.send(200, "application/json", String("{\"status\": \"error\", \"msg\": \"") + p + "\"}");
             } else {
               server.sendHeader("Connection", "close");
-              server.send(200, "application/json", "{\"status\": \"ok\", \"msg\": \"Update complete, please wait 10 seconds before powering of the module\"}");
+              server.send(200, "application/json", "{\"status\": \"ok\", \"msg\": \"Update complete, please wait 10 seconds before powering off the module\"}");
               server.client().stop();
               delay(100);
               ESP.restart();
