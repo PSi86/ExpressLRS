@@ -123,6 +123,7 @@ int32_t prevRawOffset;
 int32_t Offset;
 int32_t OffsetDx;
 int32_t prevOffset;
+uint8_t PhaseLockCounter;
 RXtimerState_e RXtimerState;
 uint32_t GotConnectionMillis = 0;
 const uint32_t ConsiderConnGoodMillis = 1000; // minimum time before we can consider a connection to be 'good'
@@ -373,23 +374,35 @@ void ICACHE_RAM_ATTR HandleRfFreqCorr(bool value) // if value is FALSE it means 
 
 void ICACHE_RAM_ATTR updatePhaseLock()
 {
-    if (connectionState != disconnected && PFDloop.resultValid())
+    if (connectionState != disconnected && PFDloop.resultValid()) 
     {
+        // don't let individual missed packets screw up our PhaseLock. Frequency Offset should be relatively constant for a given TX / RX combination (except temperature drift)
+        // the phase on the other hand is volatile and needs to be corrected especially after reconnect
+        // this function should take care of RXtimerState internally IMO
+        // the main loop should only change connectionState when necessary (no pakets received for xy ms / binding / set to connected after tentative for xy ms etc)
+        
+        // concept
+        // 1st: Rough and quick phase adjustment during connection (re)establishing
+        // 2nd: compensate for frequency missmatch by looking at "long term" change of OffsetDx 
+        // NOTE: phase corrections will mess up the frequency corrections, so need to find a way to separate those two corrections
+        // maybe by not updating the OffsetDx after a PhaseShift??!!
+        
         PFDloop.calcResult();
-        //PFDloop.reset();
-        RawOffset = PFDloop.getResult();
-        Offset = LPF_Offset.update(RawOffset);
-        OffsetDx = LPF_OffsetDx.update(RawOffset - prevRawOffset);
+        //PFDloop.reset(); // do this at the end of this function without any precondition
+        RawOffset = PFDloop.getResult(); // absolute Offset (uSec) from last iteration
+        Offset = LPF_Offset.update(RawOffset); // absolute Offset (uSec) LPFed --> compensate with phase shift
+        OffsetDx = LPF_OffsetDx.update(RawOffset - prevRawOffset); // change in Offset per period (delta uSec) LPFed --> compensate with frequency adjustment
 
         if (RXtimerState == tim_locked && LQCalc.currentIsSet()) // only update timer frequency if we have a stable sync to the external osc
+            // LQCalc.currentIsSet() should be unnecessary because we now test if both events (int+ext) have been registered before changing anything on the timer
         {
             if (NonceRX % 8 == 0) //limit rate of freq offset adjustment slightly
             {
-                if (Offset > 0)
+                if (OffsetDx > 0)
                 {
                     hwTimer.incFreqOffset();
                 }
-                else if (Offset < 0)
+                else if (OffsetDx < 0)
                 {
                     hwTimer.decFreqOffset();
                 }
@@ -398,7 +411,7 @@ void ICACHE_RAM_ATTR updatePhaseLock()
 
         if (connectionState != connected)
         {
-            hwTimer.phaseShift(RawOffset >> 1); // divided by 2, RawOffset is quicker changing than LPF'ed Offset variable
+            hwTimer.phaseShift(RawOffset >> 1); // divided by 2, RawOffset is quicker changing than LPF'ed Offset variable, so we use unfiltered value during first moments of syncing
         }
         else
         {
@@ -409,6 +422,7 @@ void ICACHE_RAM_ATTR updatePhaseLock()
         prevRawOffset = RawOffset;
     }
     PFDloop.reset();
+    PhaseLockCounter++;
 
 #ifndef DEBUG_SUPPRESS
     Serial.print(Offset);
