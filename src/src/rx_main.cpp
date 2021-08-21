@@ -236,6 +236,10 @@ void SetRFLinkRate(uint8_t index) // Set speed of RF link
     expresslrs_rf_pref_params_s *const RFperf = get_elrs_RFperfParams(index);
     bool invertIQ = UID[5] & 0x01;
 
+    if (ExpressLRS_currAirRate_Modparams->index != index) 
+    {
+        hwTimer.resetFreqOffset(); // do it here as the frequeny offset is in absolute numbers (us) and we are changing the interval. Best would be to calculate a value based on the actual rate difference between the old and new airrate
+    }
     hwTimer.updateInterval(ModParams->interval);
     Radio.Config(ModParams->bw, ModParams->sf, ModParams->cr, GetInitialFreq(), ModParams->PreambleLen, invertIQ, ModParams->PayloadLength);
 
@@ -369,10 +373,10 @@ void ICACHE_RAM_ATTR HandleRfFreqCorr(bool value) // if value is FALSE it means 
 
 void ICACHE_RAM_ATTR updatePhaseLock()
 {
-    if (connectionState != disconnected)
+    if (connectionState != disconnected && PFDloop.resultValid())
     {
         PFDloop.calcResult();
-        PFDloop.reset();
+        //PFDloop.reset();
         RawOffset = PFDloop.getResult();
         Offset = LPF_Offset.update(RawOffset);
         OffsetDx = LPF_OffsetDx.update(RawOffset - prevRawOffset);
@@ -404,6 +408,7 @@ void ICACHE_RAM_ATTR updatePhaseLock()
         prevOffset = Offset;
         prevRawOffset = RawOffset;
     }
+    PFDloop.reset();
 
 #ifndef DEBUG_SUPPRESS
     Serial.print(Offset);
@@ -540,7 +545,7 @@ void LostConnection()
     connectionStatePrev = connectionState;
     connectionState = disconnected; //set lost connection
     RXtimerState = tim_disconnected;
-    hwTimer.resetFreqOffset();
+    //hwTimer.resetFreqOffset();
     RfFreqCorrection = 0;
     #if !defined(Regulatory_Domain_ISM_2400)
     Radio.SetPPMoffsetReg(0);
@@ -561,7 +566,7 @@ void LostConnection()
     if (!InBindingMode)
     {
         while(micros() - PFDloop.getIntEventTime() > 250); // time it just after the tock()
-        hwTimer.stop();
+        hwTimer.stop(); //stop timer to stop doing fhss and incrementing NonceRX
         SetRFLinkRate(ExpressLRS_nextAirRateIndex); // also sets to initialFreq
         Radio.RXnb();
     }
@@ -770,10 +775,10 @@ void ICACHE_RAM_ATTR ProcessRFPacket()
                 || FHSSgetCurrIndex() != Radio.RXdataBuffer[1])
              {
                  //Serial.print(NonceRX, DEC); Serial.write('x'); Serial.println(Radio.RXdataBuffer[2], DEC);
+                 if (connectionState == disconnected) { doStartTimer = true; }
                  FHSSsetCurrIndex(Radio.RXdataBuffer[1]);
                  NonceRX = Radio.RXdataBuffer[2];
                  TentativeConnection();
-                 doStartTimer = true;
              }
          }
          break;
