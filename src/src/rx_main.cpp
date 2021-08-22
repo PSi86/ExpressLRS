@@ -124,6 +124,7 @@ int32_t Offset;
 int32_t OffsetDx;
 int32_t prevOffset;
 uint8_t PhaseLockCounter;
+bool didPhaseShift;
 RXtimerState_e RXtimerState;
 uint32_t GotConnectionMillis = 0;
 const uint32_t ConsiderConnGoodMillis = 1000; // minimum time before we can consider a connection to be 'good'
@@ -380,23 +381,33 @@ void ICACHE_RAM_ATTR updatePhaseLock()
         // the phase on the other hand is volatile and needs to be corrected especially after reconnect
         // this function should take care of RXtimerState internally IMO
         // the main loop should only change connectionState when necessary (no pakets received for xy ms / binding / set to connected after tentative for xy ms etc)
+        // RXtimerState = tim_disconnected: whenever a sync packet information does not line up with what we expect (means we have a major timer missmatch)
+        // RXtimerState = tim_tentative: whenever Offset var is in a good range (tbd)
+        // RXtimerState = tim_locked: whenever OffsetDx var is in a good range (tbd)
         
         // concept
         // 1st: Rough and quick phase adjustment during connection (re)establishing
         // 2nd: compensate for frequency missmatch by looking at "long term" change of OffsetDx 
         // NOTE: phase corrections will mess up the frequency corrections, so need to find a way to separate those two corrections
-        // maybe by not updating the OffsetDx after a PhaseShift??!!
+        // maybe by not updating the OffsetDx after a PhaseShift??!! --> implemented
+        // better would be to substract (or add??) the phase shift done from the value we put into OffsetDx LPF update, so the Phase Shift would become invisible to OffsetDx
         
         PFDloop.calcResult();
         //PFDloop.reset(); // do this at the end of this function without any precondition
         RawOffset = PFDloop.getResult(); // absolute Offset (uSec) from last iteration
         Offset = LPF_Offset.update(RawOffset); // absolute Offset (uSec) LPFed --> compensate with phase shift
-        OffsetDx = LPF_OffsetDx.update(RawOffset - prevRawOffset); // change in Offset per period (delta uSec) LPFed --> compensate with frequency adjustment
-
-        if (RXtimerState == tim_locked && LQCalc.currentIsSet()) // only update timer frequency if we have a stable sync to the external osc
+        
+        // Update OffsetDx only if we did no phase compensation in the last iteration because the phase shift will always give us a big change in the OffsetDx variable but we only want to detect "natural" long term changes here
+        if (!didPhaseShift)
+        {
+            OffsetDx = LPF_OffsetDx.update(RawOffset - prevRawOffset); // change in Offset per period (delta uSec) LPFed --> compensate with frequency adjustment
+            didPhaseShift = false; // variable served its purpose, so reset
+        }
+        
+        if (RXtimerState != tim_disconnected && LQCalc.currentIsSet()) // only update timer frequency if we have a stable sync to the external osc
             // LQCalc.currentIsSet() should be unnecessary because we now test if both events (int+ext) have been registered before changing anything on the timer
         {
-            if (NonceRX % 8 == 0) //limit rate of freq offset adjustment slightly
+            if (PhaseLockCounter % 8 == 0) //limit rate of freq offset adjustment slightly
             {
                 if (OffsetDx > 0)
                 {
@@ -408,14 +419,16 @@ void ICACHE_RAM_ATTR updatePhaseLock()
                 }
             }
         }
-
-        if (connectionState != connected)
+        
+        if (RXtimerState == tim_disconnected) //if (connectionState != connected)
         {
             hwTimer.phaseShift(RawOffset >> 1); // divided by 2, RawOffset is quicker changing than LPF'ed Offset variable, so we use unfiltered value during first moments of syncing
+            didPhaseShift = true;
         }
-        else
+        else if (PhaseLockCounter % 4 == 0)
         {
             hwTimer.phaseShift(Offset >> 2); // divided by 4; 
+            didPhaseShift = true;
         }
 
         prevOffset = Offset;
