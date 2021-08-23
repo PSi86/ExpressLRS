@@ -104,8 +104,8 @@ uint8_t MspData[ELRS_MSP_BUFFER];
 static uint8_t NextTelemetryType = ELRS_TELEMETRY_TYPE_LINK;
 static bool telemBurstValid;
 /// Filters ////////////////
-LPF LPF_Offset(2);
-LPF LPF_OffsetDx(4);
+LPF LPF_Offset(2); // Lenght is 4 elements
+LPF LPF_OffsetDx(4); // Lenght is 16 elements
 
 // LPF LPF_UplinkRSSI(5);
 LPF LPF_UplinkRSSI0(5);  // track rssi per antenna
@@ -122,9 +122,8 @@ int32_t RawOffset;
 int32_t prevRawOffset;
 int32_t Offset;
 int32_t OffsetDx;
-int32_t prevOffset;
+int32_t shiftPhaseBy;
 uint8_t PhaseLockCounter;
-bool didPhaseShift;
 RXtimerState_e RXtimerState;
 uint32_t GotConnectionMillis = 0;
 const uint32_t ConsiderConnGoodMillis = 1000; // minimum time before we can consider a connection to be 'good'
@@ -389,25 +388,18 @@ void ICACHE_RAM_ATTR updatePhaseLock()
         // 1st: Rough and quick phase adjustment during connection (re)establishing
         // 2nd: compensate for frequency missmatch by looking at "long term" change of OffsetDx 
         // NOTE: phase corrections will mess up the frequency corrections, so need to find a way to separate those two corrections
-        // maybe by not updating the OffsetDx after a PhaseShift??!! --> implemented
-        // better would be to substract (or add??) the phase shift done from the value we put into OffsetDx LPF update, so the Phase Shift would become invisible to OffsetDx
+        // Solution: substract the phase shift done from the value we put into OffsetDx LPF update, so the Phase Shift would become invisible to OffsetDx --> implemented
         
         PFDloop.calcResult();
         //PFDloop.reset(); // do this at the end of this function without any precondition
         RawOffset = PFDloop.getResult(); // absolute Offset (uSec) from last iteration
-        Offset = LPF_Offset.update(RawOffset); // absolute Offset (uSec) LPFed --> compensate with phase shift
+        Offset = LPF_Offset.update(RawOffset); // absolute Offset (uSec) LPFed (4 samples) --> compensate with phase shift
+        OffsetDx = LPF_OffsetDx.update(RawOffset - prevRawOffset); // change in Offset per period (delta uSec) LPFed (16 samples) --> compensate with frequency adjustment
         
-        // Update OffsetDx only if we did no phase compensation in the last iteration because the phase shift will always give us a big change in the OffsetDx variable but we only want to detect "natural" long term changes here
-        if (!didPhaseShift)
-        {
-            OffsetDx = LPF_OffsetDx.update(RawOffset - prevRawOffset); // change in Offset per period (delta uSec) LPFed --> compensate with frequency adjustment
-            didPhaseShift = false; // variable served its purpose, so reset
-        }
-        
-        if (RXtimerState != tim_disconnected && LQCalc.currentIsSet()) // only update timer frequency if we have a stable sync to the external osc
+        if (RXtimerState != tim_disconnected && LQCalc.currentIsSet()) // only update timer frequency if we have received a packet in this iteration and RXtimerState is at least tim_tentative
             // LQCalc.currentIsSet() should be unnecessary because we now test if both events (int+ext) have been registered before changing anything on the timer
         {
-            if (PhaseLockCounter % 8 == 0) //limit rate of freq offset adjustment slightly
+            if (PhaseLockCounter % 8 == 0) //limit rate of freq offset adjustment down to every 8th phase lock iteration
             {
                 if (OffsetDx > 0)
                 {
@@ -420,22 +412,43 @@ void ICACHE_RAM_ATTR updatePhaseLock()
             }
         }
         
-        if (RXtimerState == tim_disconnected) //if (connectionState != connected)
+        if (RXtimerState == tim_disconnected) //was: if (connectionState != connected)
         {
-            hwTimer.phaseShift(RawOffset >> 1); // divided by 2, RawOffset is quicker changing than LPF'ed Offset variable, so we use unfiltered value during first moments of syncing
-            didPhaseShift = true;
+            shiftPhaseBy = RawOffset >> 1; // divided by 2, RawOffset is quicker changing than LPF'ed Offset variable, so we use unfiltered value during first moments of syncing
         }
-        else if (PhaseLockCounter % 4 == 0)
+        else if (PhaseLockCounter % 3 == 0) // limit rate of phase shifting down to every 3rd phase lock iteration (length of Offset LPF is 4)
         {
-            hwTimer.phaseShift(Offset >> 2); // divided by 4; 
-            didPhaseShift = true;
+            shiftPhaseBy = Offset >> 2; // divided by 4
+        }
+        else
+        {
+            shiftPhaseBy = 0;
         }
 
-        prevOffset = Offset;
-        prevRawOffset = RawOffset;
+        hwTimer.phaseShift(shiftPhaseBy);
+        
+        prevRawOffset = RawOffset - shiftPhaseBy; // compensate for phase adjustments to eliminate impact on frequency correction (only use of this var is for OffsetDx, which is used for frequency correction)
     }
-    PFDloop.reset();
+
+    PFDloop.reset(); // clear recorded event-times and get ready for next measurement
     PhaseLockCounter++;
+
+    //if (abs(RawOffset) > 100 || abs(Offset) > 100)
+    if (abs(Offset) > 100) // if unfiltered or filtered Offset is exceeding the limit we are already in a bad place. by changing RXtimerState to disconnected the phase will be adjusted very quick, which is necessary to make sure we do not loose sync completely
+    {
+        RXtimerState = tim_disconnected;
+    }
+    else if (abs(OffsetDx) <= 5) // unfiltered AND filtered Offset are within the limit -> are we even happy with the stability of the offset?
+    {
+        RXtimerState = tim_locked;
+        #ifndef DEBUG_SUPPRESS
+            Serial.println("Timer Considered Locked");
+        #endif
+    }
+    else // Offset if fine but we are not happy with the stability of the value 
+    {
+        RXtimerState = tim_tentative;
+    }
 
 #ifndef DEBUG_SUPPRESS
     Serial.print(Offset);
@@ -464,7 +477,7 @@ void ICACHE_RAM_ATTR HWtimerCallbackTick() // this is 180 out of phase with the 
     uplinkLQ = LQCalc.getLQ();
     // Only advance the LQI period counter if we didn't send Telemetry this period
     if (!alreadyTLMresp)
-        LQCalc.inc();
+        LQCalc.inc(); // after this we are ready to receive the next packet
 
     alreadyTLMresp = false;
     alreadyFHSS = false;
@@ -572,15 +585,14 @@ void LostConnection()
     connectionStatePrev = connectionState;
     connectionState = disconnected; //set lost connection
     RXtimerState = tim_disconnected;
-    //hwTimer.resetFreqOffset();
+    //hwTimer.resetFreqOffset(); // TEST: as the frequency offset - if calculated correctly - is HW related for a given TX/RX combination it should not be necessary to reset it anywhere except from a change in the link rate
     RfFreqCorrection = 0;
     #if !defined(Regulatory_Domain_ISM_2400)
     Radio.SetPPMoffsetReg(0);
     #endif
-    Offset = 0;
-    OffsetDx = 0;
-    RawOffset = 0;
-    prevOffset = 0;
+    //Offset = 0; //value is calculated in UpdatePhaseLock() anyway and it is only needed there (except as a secondary condition for changes in connectionState variable)
+    //OffsetDx = 0; //value is calculated in UpdatePhaseLock() anyway and it is only needed there (except as a secondary condition for changes in connectionState variable)
+    //RawOffset = 0; //value is calculated in UpdatePhaseLock() anyway and it is only needed there (except as a secondary condition for changes in connectionState variable)
     GotConnectionMillis = 0;
     uplinkLQ = 0;
     LQCalc.reset();
@@ -593,7 +605,7 @@ void LostConnection()
     if (!InBindingMode)
     {
         while(micros() - PFDloop.getIntEventTime() > 250); // time it just after the tock()
-        hwTimer.stop(); //stop timer to stop doing fhss and incrementing NonceRX
+        hwTimer.stop(); //stop timer to stop fhss and incrementing NonceRX
         SetRFLinkRate(ExpressLRS_nextAirRateIndex); // also sets to initialFreq
         Radio.RXnb();
     }
@@ -611,18 +623,19 @@ void LostConnection()
 #endif
 }
 
-void ICACHE_RAM_ATTR TentativeConnection(unsigned long now)
+void ICACHE_RAM_ATTR TentativeConnection(unsigned long now) // called when a sync packet is received while we are in disconnected state or the sync data for Nonce and FHSS do not match
 {
-    PFDloop.reset();
     connectionStatePrev = connectionState;
     connectionState = tentative;
-    RXtimerState = tim_disconnected;
-    Serial.println("tentative conn");
-    RfFreqCorrection = 0;
-    Offset = 0;
-    prevOffset = 0;
+    PFDloop.reset();
+    RXtimerState = tim_disconnected; // we only come here if we were not connected before or if we reveived a sync packet with a missmatching Nonce or FHSS index, so we definitely have to resync the timer
+    //Offset = 0; //value is calculated in UpdatePhaseLock() anyway and it is only needed there (except as a secondary condition for changes in connectionState variable)
     LPF_Offset.init(0);
+    LPF_OffsetDx.init(0);
+    RfFreqCorrection = 0;
     RFmodeLastCycled = now; // give another 3 sec for lock to occur
+
+    Serial.println("tentative conn");
 
 #if WS2812_LED_IS_USED
     uint8_t LEDcolor[3] = {0};
@@ -649,7 +662,7 @@ void GotConnection(unsigned long now)
     connectionStatePrev = connectionState;
     connectionState = connected; //we got a packet, therefore no lost connection
     disableWebServer = true;
-    RXtimerState = tim_tentative;
+    //RXtimerState = tim_tentative; // dont touch RXtimerState anywhere but in UpdatePhaseLock()
     GotConnectionMillis = now;
 
     Serial.println("got conn");
@@ -803,11 +816,10 @@ void ICACHE_RAM_ATTR ProcessRFPacket()
                 || FHSSgetCurrIndex() != Radio.RXdataBuffer[1])
              {
                  //Serial.print(NonceRX, DEC); Serial.write('x'); Serial.println(Radio.RXdataBuffer[2], DEC);
+                 if (connectionState == disconnected) { doStartTimer = true; } // Only start timer if we come from disconnected state -> originally the line was: doStartTimer = true;
                  FHSSsetCurrIndex(Radio.RXdataBuffer[1]);
                  NonceRX = Radio.RXdataBuffer[2];
                  TentativeConnection(now);
-                 //doStartTimer = true;
-                 if (connectionState == disconnected) { doStartTimer = true; } // Only start timer if we come from disconnected state
              }
          }
          break;
@@ -1137,9 +1149,9 @@ static void updateTelemetryBurst()
 /* If not connected will rotate through the RF modes looking for sync
  * and blink LED
  */
-static void cycleRfMode(unsigned long now)
+static void cycleRfMode(unsigned long now) // never cycles RF mode from a tentative or connected state
 {
-    if (connectionState == connected || InBindingMode || webUpdateMode)
+    if (connectionState != disconnected || InBindingMode || webUpdateMode)
         return;
 
     // Actually cycle the RF mode if not LOCK_ON_FIRST_CONNECTION
@@ -1272,7 +1284,9 @@ void loop()
         LostConnection();
     }
 
-    if ((connectionState == tentative) && (abs(OffsetDx) <= 10) && (Offset < 100) && (LQCalc.getLQRaw() > minLqForChaos())) //detects when we are connected
+    //if ((connectionState == tentative) && (abs(OffsetDx) <= 10) && (Offset < 100) && (LQCalc.getLQRaw() > minLqForChaos())) //detects when we are connected //TODO: check minLqForChaos behaviour AND get rid of Offset checks - those are now done in the UpdatePhaseLock() to update RXtimerState
+    //if ((connectionState == tentative) && RXtimerState == tim_locked && (LQCalc.getLQRaw() > minLqForChaos())) //detects when we are connected //TODO: check minLqForChaos behaviour AND get rid of Offset checks - those are now done in the UpdatePhaseLock() to update RXtimerState
+    if ((connectionState == tentative) && RXtimerState == tim_locked) //TEST if this is enough
     {
         GotConnection(now);
     }
@@ -1298,10 +1312,7 @@ void loop()
 
     if ((RXtimerState == tim_tentative) && ((now - GotConnectionMillis) > ConsiderConnGoodMillis) && (abs(OffsetDx) <= 5))
     {
-        RXtimerState = tim_locked;
-        #ifndef DEBUG_SUPPRESS
-        Serial.println("Timer Considered Locked");
-        #endif
+        //RXtimerState = tim_locked; // now done in UpdatePhaseLock() - just kept here as reference how to use ConsiderConnGoodMillis
     }
 
 #if WS2812_LED_IS_USED
