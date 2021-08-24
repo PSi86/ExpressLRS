@@ -520,23 +520,26 @@ local function runDevicePage(event)
     else
       lcd.drawScreenTitle(deviceName.." : "..tostring(badPkt).."/"..tostring(goodPkt), 0, 0)
     end
-  for y = 1, 7 do
-      local field = getField(pageOffset+y)
-      if not field then
-        break
-      elseif field.name == nil then
-        lcd.drawText(0, 1+8*y, "...")
-      else
-        local attr = lineIndex == (pageOffset+y) and ((edit == true and BLINK or 0) + INVERS) or 0
-        if field.type == 11 then
-          lcd.drawFilledRectangle(0, 1+8*y, LCD_W, 8, GREY_DEFAULT)
-          lcd.drawText(0, 1+8*y, field.name)
-        elseif functions[field.type+1] then
-          lcd.drawText(0, 1+8*y, field.name)
-          functions[field.type+1].display(field, 1+8*y, attr)
-      end
-    end
+  
+	for y = 1, 7 do
+	  local field = getField(pageOffset+y)
+	  if not field then
+		break
+	  elseif field.name == nil then
+		lcd.drawText(0, 1+8*y, "...")
+	  else
+		local attr = lineIndex == (pageOffset+y) and ((edit == true and BLINK or 0) + INVERS) or 0
+		if field.type == 11 then
+		  lcd.drawFilledRectangle(0, 1+8*y, LCD_W, 8, GREY_DEFAULT)
+		  lcd.drawText(0, 1+8*y, field.name)
+		elseif functions[field.type+1] then
+		  lcd.drawText(0, 1+8*y, field.name)
+		  functions[field.type+1].display(field, 1+8*y, attr)
+		end
+	  end
+	end
   end
+  
   return 0
 end
 
