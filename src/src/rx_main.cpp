@@ -336,8 +336,7 @@ bool ICACHE_RAM_ATTR HandleSendTelemetryResponse()
     return true;
 }
 
-void ICACHE_RAM_ATTR HandleRfFreqCorr(bool value) // if value is FALSE it means the signal is comming in at a slightly 
-    higher frequency than currently set
+void ICACHE_RAM_ATTR HandleRfFreqCorr(bool value) // if value is FALSE it means the signal is comming in at a slightly higher frequency than currently set
 {
     //Serial.println(RfFreqCorrection);
     if (!value)
@@ -399,7 +398,7 @@ void ICACHE_RAM_ATTR updatePhaseLock()
         if (RXtimerState != tim_disconnected && LQCalc.currentIsSet()) // only update timer frequency if we have received a packet in this iteration and RXtimerState is at least tim_tentative
             // LQCalc.currentIsSet() should be unnecessary because we now test if both events (int+ext) have been registered before changing anything on the timer
         {
-            if (PhaseLockCounter % 8 == 0) //limit rate of freq offset adjustment down to every 8th phase lock iteration
+            if (NonceRX % 8 == 0) //limit rate of freq offset adjustment down to every 8th phase lock iteration
             {
                 if (OffsetDx > 0)
                 {
@@ -416,7 +415,7 @@ void ICACHE_RAM_ATTR updatePhaseLock()
         {
             shiftPhaseBy = RawOffset >> 1; // divided by 2, RawOffset is quicker changing than LPF'ed Offset variable, so we use unfiltered value during first moments of syncing
         }
-        else if (PhaseLockCounter % 3 == 0) // limit rate of phase shifting down to every 3rd phase lock iteration (length of Offset LPF is 4)
+        else if (NonceRX % 3 == 0) // if RXtimerState is at least tentative limit rate of phase shifting down to every 3rd phase lock iteration (length of Offset LPF is 4)
         {
             shiftPhaseBy = Offset >> 2; // divided by 4
         }
@@ -426,29 +425,29 @@ void ICACHE_RAM_ATTR updatePhaseLock()
         }
 
         hwTimer.phaseShift(shiftPhaseBy);
-        
         prevRawOffset = RawOffset - shiftPhaseBy; // compensate for phase adjustments to eliminate impact on frequency correction (only use of this var is for OffsetDx, which is used for frequency correction)
     }
 
-    PFDloop.reset(); // clear recorded event-times and get ready for next measurement
-    PhaseLockCounter++;
-
-    //if (abs(RawOffset) > 100 || abs(Offset) > 100)
-    if (abs(Offset) > 100) // if unfiltered or filtered Offset is exceeding the limit we are already in a bad place. by changing RXtimerState to disconnected the phase will be adjusted very quick, which is necessary to make sure we do not loose sync completely
+    //if (abs(RawOffset) > 100 || abs(Offset) > 100) // if unfiltered or filtered Offset is exceeding the limit we are already in a bad place. by changing RXtimerState to disconnected the phase will be adjusted very quick, which is necessary to make sure we do not loose sync completely
+    //if (abs(Offset) > 100 || LQCalc.getLQRaw() < 8) // downside of using LQraw(): when we are in a situation where we get only 8 out of 100 packets anyway we would destabilize the phase lock and then lose connection completely
+    if (abs(Offset) > 400 || PhaseLockCounter < 4) // if filtered Offset is exceeding this absolute time offset limit or we have not received enough samples to fill the LPF (and so make the value meaningful) we change RXtimerState to disconnected so the phase will be adjusted very quickly
     {
         RXtimerState = tim_disconnected;
     }
-    else if (abs(OffsetDx) <= 5) // unfiltered AND filtered Offset are within the limit -> are we even happy with the stability of the offset?
+    else if (PhaseLockCounter > 13 && abs(OffsetDx) <= 5) // we have filled the OffsetDx LPF and the resulting value is low enough
     {
         RXtimerState = tim_locked;
         #ifndef DEBUG_SUPPRESS
             Serial.println("Timer Considered Locked");
         #endif
     }
-    else // Offset if fine but we are not happy with the stability of the value 
+    else // Offset is fine but we are not happy with the stability of the value (OffsetDx)
     {
         RXtimerState = tim_tentative;
     }
+
+    PFDloop.reset(); // clear recorded event-times and get ready for next measurement
+    if (PhaseLockCounter < 254) PhaseLockCounter++; // count the first 255 packets after a tentative connection event where the PFD measurement is succesful
 
 #ifndef DEBUG_SUPPRESS
     Serial.print(Offset);
@@ -598,6 +597,7 @@ void LostConnection()
     LQCalc.reset();
     LPF_Offset.init(0);
     LPF_OffsetDx.init(0);
+    PhaseLockCounter = 0;
     alreadyTLMresp = false;
     alreadyFHSS = false;
     LED = false; // Make first LED cycle turn it on
@@ -627,11 +627,14 @@ void ICACHE_RAM_ATTR TentativeConnection(unsigned long now) // called when a syn
 {
     connectionStatePrev = connectionState;
     connectionState = tentative;
-    PFDloop.reset();
+    
+    LQCalc.reset();
+    PFDloop.reset(); // should not be necessary but it does not hurt to reset
     RXtimerState = tim_disconnected; // we only come here if we were not connected before or if we reveived a sync packet with a missmatching Nonce or FHSS index, so we definitely have to resync the timer
     //Offset = 0; //value is calculated in UpdatePhaseLock() anyway and it is only needed there (except as a secondary condition for changes in connectionState variable)
     LPF_Offset.init(0);
     LPF_OffsetDx.init(0);
+    PhaseLockCounter = 0;
     RfFreqCorrection = 0;
     RFmodeLastCycled = now; // give another 3 sec for lock to occur
 
@@ -1280,6 +1283,7 @@ void loop()
 
     uint32_t localLastValidPacket = LastValidPacket; // Required to prevent race condition due to LastValidPacket getting updated from ISR
     if ((connectionState == connected) && ((int32_t)ExpressLRS_currAirRate_RFperfParams->RFmodeCycleInterval < (int32_t)(now - localLastValidPacket))) // check if we lost conn.
+    //if ((connectionState == connected) && ((int32_t)cycleInterval < (int32_t)(now - localLastValidPacket))) // TEST: this would give us a quicker resync but 
     {
         LostConnection();
     }
