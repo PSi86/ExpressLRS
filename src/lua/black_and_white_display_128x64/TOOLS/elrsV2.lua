@@ -33,16 +33,20 @@ local elrsFlagsInfo = "no"
 local fields_count = 0
 local devicesRefreshTimeout = 100
 local allParamsLoaded = 0
+local folderAccess = 0
+local runningCommand = 0
 
 local function getField(line)
   local counter = 1
   for i = 1, #fields do
     local field = fields[i]
     if not field.hidden then
-      if counter < line then
-        counter = counter + 1
-      else
-        return field
+      if folderAccess == field.parent then
+        if counter < line then
+          counter = counter + 1
+        else
+          return field
+        end
       end
     end
   end
@@ -52,7 +56,7 @@ local function initLineIndex()
   lineIndex = 0
   for i = 1, #fields do
     local field = getField(i)
-    if field and field.type ~= 11 and field.type ~= 12 and field.name ~= nil then
+    if field and field.type ~= 12 and field.name ~= nil then
       lineIndex = i
       break
     end
@@ -106,7 +110,7 @@ local function selectField(step)
       pageOffset = 0
     end
     field = getField(newLineIndex)
-  until newLineIndex == lineIndex or (field and field.type ~= 11 and field.name)
+  until newLineIndex == lineIndex or (field and field.name)
   lineIndex = newLineIndex
   if lineIndex > 7 + pageOffset then
     pageOffset = lineIndex - 7
@@ -144,6 +148,7 @@ local function getBitBin(data, bitPosition)
 
 local function parseDeviceInfoMessage(data)
   local offset
+  allParamsLoaded = 0
   deviceId = data[2]
   deviceName, offset = fieldGetString(data, 3)
   fields_count = data[offset+12]
@@ -204,7 +209,7 @@ local function fieldSignedSave(field, size)
 end
 
 local function fieldIntDisplay(field, y, attr)
-  lcd.drawNumber(140, y, field.value, LEFT + attr)
+  lcd.drawNumber(89, y, field.value, LEFT + attr)
   lcd.drawText(lcd.getLastPos(), y, field.unit, attr)
 end
 
@@ -266,7 +271,7 @@ local function formatFloat(num, decimals)
 end
 
 local function fieldFloatDisplay(field, y, attr)
-  lcd.drawText(140, y, formatFloat(field.value, field.prec), LEFT + attr)
+  lcd.drawText(65, y, formatFloat(field.value, field.prec), LEFT + attr)
   lcd.drawText(lcd.getLastPos(), y, field.unit, attr)
 end
 
@@ -293,7 +298,7 @@ local function fieldTextSelectionSave(field)
 end
 
 local function fieldTextSelectionDisplay(field, y, attr)
-  lcd.drawText(140, y, field.values[field.value+1], attr)
+  lcd.drawText(65, y, field.values[field.value+1], attr)
   lcd.drawText(lcd.getLastPos(), y, field.unit, attr)
 end
 
@@ -316,11 +321,15 @@ end
 
 local function fieldStringDisplay(field, y, attr)
   if edit == true and attr then
-    lcd.drawText(140, y, field.value, FIXEDWIDTH)
-    lcd.drawText(134+6*charIndex, y, string.sub(field.value, charIndex, charIndex), FIXEDWIDTH + attr)
+    lcd.drawText(65, y, field.value, FIXEDWIDTH)
+    lcd.drawText(83+6*charIndex, y, string.sub(field.value, charIndex, charIndex), FIXEDWIDTH + attr)
   else
-    lcd.drawText(140, y, field.value, attr)
+    lcd.drawText(65, y, field.value, attr)
   end
+end
+
+local function fieldFolderOpen(field)
+  folderAccess = field.id
 end
 
 local function fieldCommandLoad(field, data, offset)
@@ -328,12 +337,13 @@ local function fieldCommandLoad(field, data, offset)
   field.timeout = data[offset+1]
   field.info, offset = fieldGetString(data, offset+2)
   if field.status == 0 then
+    field.previousInfo = field.info
     fieldPopup = nil
   end
 end
 
 local function fieldCommandSave(field)
-  if field.status == 0 then
+  if field.status < 4 then
     field.status = 1
     crossfireTelemetryPush(0x2D, { deviceId, 0xEF, field.id, field.status })
     fieldPopup = field
@@ -343,9 +353,6 @@ end
 
 local function fieldCommandDisplay(field, y, attr)
   lcd.drawText(0, y, field.name, attr)
-  if field.info ~= "" then
-    lcd.drawText(140, y, "[" .. field.info .. "]")
-  end
 end
 
 local functions = {
@@ -360,7 +367,7 @@ local functions = {
   { load=fieldFloatLoad, save=fieldFloatSave, display=fieldFloatDisplay },
   { load=fieldTextSelectionLoad, save=fieldTextSelectionSave, display=fieldTextSelectionDisplay },
   { load=fieldStringLoad, save=fieldStringSave, display=fieldStringDisplay },
-  nil,
+  { load=nil, save=fieldFolderOpen, display=nil },
   { load=fieldStringLoad, save=fieldStringSave, display=fieldStringDisplay },
   { load=fieldCommandLoad, save=fieldCommandSave, display=fieldCommandDisplay },
 }
@@ -394,19 +401,21 @@ local function parseParameterInfoMessage(data)
       end
       field.name = indent .. name
     end
-    if functions[field.type+1] then
+    if functions[field.type+1].load then
       functions[field.type+1].load(field, fieldData, i)
     end
     if not fieldPopup then
-      if lineIndex == 0 and field.hidden ~= true and field.type and field.type ~= 11 and field.type ~= 12 then
+      if lineIndex == 0 and field.hidden ~= true and folderAccess == field.parent and field.type and field.type ~= 12 then
         initLineIndex()
       end
-      if fieldId == fields_count then
-        allParamsLoaded = 1
-        fieldId = 1 + (fieldId % #fields)
-      else
-        fieldId = 1 + (fieldId % #fields)
-      end      
+      if fieldPopup == nil then
+        if fieldId == fields_count then
+          allParamsLoaded = 1
+          fieldId = 1 + (fieldId % #fields)
+        else
+          fieldId = 1 + (fieldId % #fields)
+        end
+      end
     end
     fieldData = {}
   end
@@ -431,12 +440,7 @@ local function refreshNext()
     if time > devicesRefreshTimeout and fields_count < 1  then
       devicesRefreshTimeout = time + 100 -- 1s
       crossfireTelemetryPush(0x28, { 0x00, 0xEF })
-    elseif fieldPopup then
-      if time > fieldTimeout then
-        crossfireTelemetryPush(0x2D, { deviceId, 0xEF, fieldPopup.id, 6 })
-        fieldTimeout = time + fieldPopup.timeout
-      end
-    elseif time > fieldTimeout and not edit then
+    elseif time > fieldTimeout and not edit then --reload lua field
       if allParamsLoaded < 1 then
         crossfireTelemetryPush(0x2C, { deviceId, 0xEF, fieldId, fieldChunk })
         fieldTimeout = time + 500 -- 2s
@@ -464,8 +468,8 @@ local function runDevicePage(event)
       functions[field.type+1].save(field)
       allParamsLoaded = 0
     else
-          allParamsLoaded = 0
-      
+      folderAccess = 0
+      allParamsLoaded = 0
     end
   elseif event == EVT_VIRTUAL_ENTER then        -- toggle editing/selecting current field
     if elrsFlags > 0 then
@@ -494,9 +498,9 @@ local function runDevicePage(event)
       end
     end
   elseif edit then
-    if event == EVT_VIRTUAL_INC or event == EVT_VIRTUAL_INC_REPT then
+    if event == EVT_VIRTUAL_NEXT or event == EVT_VIRTUAL_NEXT_REPT then
       incrField(1)
-    elseif event == EVT_VIRTUAL_DEC or event == EVT_VIRTUAL_DEC_REPT then
+    elseif event == EVT_VIRTUAL_PREV or event == EVT_VIRTUAL_PREV_REPT then
       incrField(-1)
     end
   else
@@ -506,7 +510,6 @@ local function runDevicePage(event)
       selectField(-1)
     end
   end
-
   if elrsFlags > 0 then
     lcd.clear()
     lcd.drawScreenTitle(deviceName.." : "..tostring(badPkt).."/"..tostring(goodPkt), 0, 0)
@@ -520,40 +523,75 @@ local function runDevicePage(event)
     else
       lcd.drawScreenTitle(deviceName.." : "..tostring(badPkt).."/"..tostring(goodPkt), 0, 0)
     end
-  
-	for y = 1, 7 do
-	  local field = getField(pageOffset+y)
-	  if not field then
-		break
-	  elseif field.name == nil then
-		lcd.drawText(0, 1+8*y, "...")
-	  else
-		local attr = lineIndex == (pageOffset+y) and ((edit == true and BLINK or 0) + INVERS) or 0
-		if field.type == 11 then
-		  lcd.drawFilledRectangle(0, 1+8*y, LCD_W, 8, GREY_DEFAULT)
-		  lcd.drawText(0, 1+8*y, field.name)
-		elseif functions[field.type+1] then
-		  lcd.drawText(0, 1+8*y, field.name)
-		  functions[field.type+1].display(field, 1+8*y, attr)
-		end
-	  end
-	end
+    for y = 1, 7 do
+      local field = getField(pageOffset+y)
+      if not field then
+        break
+      elseif field.name == nil then
+        lcd.drawText(0, 1+8*y, "...")
+      else
+        local attr = lineIndex == (pageOffset+y) and ((edit == true and BLINK or 0) + INVERS) or 0
+        if field.type == 11 then
+          lcd.drawFilledRectangle(0, 1+8*y, LCD_W, 8, GREY_DEFAULT)
+          lcd.drawText(0, 1+8*y, field.name,attr)
+        elseif field.type == 13 then
+          lcd.drawFilledRectangle(0, 1+8*y, LCD_W, 8, GREY_DEFAULT)
+          lcd.drawText(0, 1+8*y, field.name,attr)
+        else
+          lcd.drawText(0, 1+8*y, field.name)
+        end
+        if functions[field.type+1].display then
+          functions[field.type+1].display(field, 1+8*y, attr)
+        end
+      end
+    end
   end
-  
   return 0
 end
 
 local function runPopupPage(event)
+  if event == EVT_VIRTUAL_EXIT then             -- exit script
+    fieldTimeout = getTime() + 200 -- 2s
+    crossfireTelemetryPush(0x2D, { deviceId, 0xEF, fieldPopup.id, 5 })
+    fieldChunk = 0
+    fieldData = {}
+    allParamsLoaded = 0
+    fieldPopup = nil
+    runningCommand = 0
+  return 0
+  end
+  if getTime() > fieldTimeout then
+    fieldId = fieldPopup.id
+    crossfireTelemetryPush(0x2C, { deviceId, 0xEF, fieldPopup.id, fieldChunk })
+    fieldTimeout = getTime() + fieldPopup.timeout
+  end
+  if command == 0x2B then
+    parseParameterInfoMessage(data)
+    fieldTimeout = 0
+  end
   local result
   if fieldPopup.status == 3 then
-    result = popupConfirmation(fieldPopup.info, event)
+    runningCommand = 1
+    result = popupConfirmation("PRESS [OK] to confirm", fieldPopup.previousInfo, event)
   else
+    if fieldPopup.status == 2 then
+      runningCommand = 1
+    end
+    if fieldPopup.status == 0 and runningCommand == 1 then
+      fieldPopup = nil
+      runningCommand = 0
+      return 0
+    end
     result = popupWarning(fieldPopup.info, event)
   end
   if result == "OK" then
+    fieldPopup.status = 2
+    result = popupWarning("OK IS PRESSED", event)
     crossfireTelemetryPush(0x2D, { deviceId, 0xEF, fieldPopup.id, 4 })
   elseif result == "CANCEL" then
     crossfireTelemetryPush(0x2D, { deviceId, 0xEF, fieldPopup.id, 5 })
+    runningCommand = 0
+    fieldPopup = nil
   end
   return 0
 end
@@ -574,6 +612,7 @@ local function run(event)
   if fieldPopup ~= nil then
     result = runPopupPage(event)
   else
+    runningCommand = 0
     result = runDevicePage(event)
   end
 
