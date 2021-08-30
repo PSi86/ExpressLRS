@@ -47,14 +47,8 @@
 #define MaxPower PWR_10mW // Output is actually 14mW
 #define DefaultPowerEnum PWR_10mW
 
-#elif defined(TARGET_TX_FM30) || \
-      defined(TARGET_RX_FM30_MINI) || \
-      defined(TARGET_TX_FM30_MINI)
-#if defined(UNLOCK_HIGHER_POWER)
-#define MaxPower PWR_250mW
-#else
+#elif defined(TARGET_TX_FM30) || defined(TARGET_RX_FM30_MINI)
 #define MaxPower PWR_100mW
-#endif
 #define DefaultPowerEnum PWR_50mW
 
 #else

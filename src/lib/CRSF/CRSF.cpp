@@ -1,7 +1,7 @@
 #include "CRSF.h"
 #include "../../lib/FIFO/FIFO.h"
 #include "telemetry_protocol.h"
-#include "logging.h"
+//#define DEBUG_CRSF_NO_OUTPUT // debug, don't send RC msgs over UART
 
 #ifdef PLATFORM_ESP32
 HardwareSerial SerialPort(1);
@@ -37,7 +37,6 @@ void (*CRSF::connected)() = &nullCallback;    // called when CRSF stream is rega
 
 void (*CRSF::RecvParameterUpdate)() = &nullCallback; // called when recv parameter update req, ie from LUA
 void (*CRSF::RecvModelUpdate)() = &nullCallback; // called when model id cahnges, ie command from Radio
-void (*CRSF::RCdataCallback)() = &nullCallback; // called when there is new RC data
 
 /// UART Handling ///
 uint32_t CRSF::GoodPktsCountResult = 0;
@@ -74,7 +73,6 @@ volatile uint32_t CRSF::OpenTXsyncLastSent = 0;
 uint32_t CRSF::RequestedRCpacketInterval = 5000; // default to 200hz as per 'normal'
 volatile uint32_t CRSF::RCdataLastRecv = 0;
 volatile int32_t CRSF::OpenTXsyncOffset = 0;
-bool CRSF::OpentxSyncActive = true;
 
 #define MAX_BYTES_SENT_IN_UART_OUT 32
 uint8_t CRSF::CRSFoutBuffer[CRSF_MAX_PACKET_LEN] = {0};
@@ -108,7 +106,7 @@ uint32_t CRSF::luaHiddenFlags = 0;
 
 void CRSF::Begin()
 {
-    DBGLN("About to start CRSF task...");
+    Serial.println("About to start CRSF task...");
 
 #if CRSF_TX_MODULE
     UARTcurrentBaud = CRSF_OPENTX_FAST_BAUDRATE;
@@ -120,7 +118,7 @@ void CRSF::Begin()
 
 
 #elif defined(PLATFORM_STM32)
-    DBGLN("Start STM32 R9M TX CRSF UART");
+    Serial.println("Start STM32 R9M TX CRSF UART");
 
     CRSF::Port.setTx(GPIO_PIN_RCSIGNAL_TX);
     CRSF::Port.setRx(GPIO_PIN_RCSIGNAL_RX);
@@ -146,7 +144,7 @@ void CRSF::Begin()
     USART2->CR2 |= USART_CR2_RXINV | USART_CR2_TXINV; //inverted
     USART2->CR1 |= USART_CR1_UE;
 #endif
-    DBGLN("STM32 CRSF UART LISTEN TASK STARTED");
+    Serial.println("STM32 CRSF UART LISTEN TASK STARTED");
     CRSF::Port.flush();
 #endif
 
@@ -177,7 +175,7 @@ void CRSF::End()
         }
     }
     //CRSF::Port.end(); // don't call seria.end(), it causes some sort of issue with the 900mhz hardware using gpio2 for serial 
-    DBGLN("CRSF UART END");
+    Serial.println("CRSF UART END");
 #endif // CRSF_TX_MODULE
 }
 
@@ -359,7 +357,7 @@ void CRSF::getLuaTextSelectionStructToArray(const void * luaStruct, uint8_t *out
     
     outarray[0] = p1->luaProperties1.id;
     outarray[1] = 0; //chunk
-    outarray[2] = p1->luaProperties1.parent; //parent
+    outarray[2] = 0; //parent
     outarray[3] = p1->luaProperties1.type;
     outarray[3] += ((luaHiddenFlags >>((p1->luaProperties1.id)-1)) & 1)*128;
     //outarray[4+(strlen(p1->label1)+1)+(strlen(p1->textOption)+1)] = (uint8_t)luaValues[p1->luaProperties1.id];
@@ -373,7 +371,7 @@ void CRSF::getLuaCommandStructToArray(const void * luaStruct, uint8_t *outarray)
     
     outarray[0] = p1->luaProperties1.id;
     outarray[1] = 0; //chunk
-    outarray[2] = p1->luaProperties1.parent; //parent
+    outarray[2] = 0; //parent
     outarray[3] = p1->luaProperties1.type;
     outarray[3] += ((luaHiddenFlags >>((p1->luaProperties1.id)-1)) & 1)*128;
     //outarray[4+(strlen(p1->label1)+1)] = (uint8_t)luaValues[p1->luaProperties1.id];
@@ -387,7 +385,7 @@ void CRSF::getLuaUint8StructToArray(const void * luaStruct, uint8_t *outarray){
     
     outarray[0] = p1->luaProperties1.id;
     outarray[1] = 0; //chunk
-    outarray[2] = p1->luaProperties1.parent; //parent
+    outarray[2] = 0; //parent
     outarray[3] = p1->luaProperties1.type;
     outarray[3] += ((luaHiddenFlags >>((p1->luaProperties1.id)-1)) & 1)*128;
     //outarray[4+(strlen(p1->label1)+1)] = (uint8_t)luaValues[p1->luaProperties1.id];
@@ -401,7 +399,7 @@ void CRSF::getLuaUint16StructToArray(const void * luaStruct, uint8_t *outarray){
     
     outarray[0] = p1->luaProperties1.id;
     outarray[1] = 0; //chunk
-    outarray[2] = p1->luaProperties1.parent; //parent
+    outarray[2] = 0; //parent
     outarray[3] = p1->luaProperties1.type;
     outarray[3] += ((luaHiddenFlags >>((p1->luaProperties1.id)-1)) & 1)*128;
     //[4+(strlen(p1->label1)+1)] = (uint8_t)(luaValues[p1->luaProperties1.id] >> 8);
@@ -415,7 +413,7 @@ void CRSF::getLuaStringStructToArray(const void * luaStruct, uint8_t *outarray){
     memcpy(outarray+4+(strlen(p1->label1)+1),p1->label2,strlen(p1->label2)+1);
     outarray[0] = p1->luaProperties1.id;
     outarray[1] = 0; //chunk
-    outarray[2] = p1->luaProperties1.parent; //parent
+    outarray[2] = 0; //parent
     outarray[3] = p1->luaProperties1.type;
     outarray[3] += ((luaHiddenFlags >>((p1->luaProperties1.id)-1)) & 1)*128;
 }
@@ -424,10 +422,38 @@ void CRSF::getLuaFolderStructToArray(const void * luaStruct, uint8_t *outarray){
     memcpy(outarray+4,p1->label1,strlen(p1->label1)+1);
     outarray[0] = p1->luaProperties1.id;
     outarray[1] = 0; //chunk
-    outarray[2] = p1->luaProperties1.parent; //parent
+    outarray[2] = 0; //parent
     outarray[3] = p1->luaProperties1.type;
     outarray[3] += ((luaHiddenFlags >>((p1->luaProperties1.id)-1)) & 1)*128;
 }
+/** we dont use these yet for OUR LUA
+
+void CRSF::getLuaint8StructToArray(void * luaStruct, uint8_t *outarray){
+    struct tagLuaItem_int8 *p1 = (struct tagLuaItem_int8*)luaStruct;
+    memcpy(outarray,&p1->luaProperties1,4);
+    memcpy(outarray+4,p1->label1,strlen(p1->label1)+1);
+    memcpy(outarray+4+(strlen(p1->label1)+1),&p1->luaProperties2,sizeof(p1->luaProperties2));
+    memcpy(outarray+4+(strlen(p1->label1)+1)+sizeof(p1->luaProperties2),p1->label2,strlen(p1->label2)+1);
+    
+}
+
+void CRSF::getLuaint16StructToArray(void * luaStruct, uint8_t *outarray){
+    struct tagLuaItem_int16 *p1 = (struct tagLuaItem_int16*)luaStruct;
+    memcpy(outarray,&p1->luaProperties1,4);
+    memcpy(outarray+4,p1->label1,strlen(p1->label1)+1);
+    memcpy(outarray+4+(strlen(p1->label1)+1),&p1->luaProperties2,sizeof(p1->luaProperties2));
+    memcpy(outarray+4+(strlen(p1->label1)+1)+sizeof(p1->luaProperties2),p1->label2,strlen(p1->label2)+1);
+    
+}
+void CRSF::getLuaFloatStructToArray(void * luaStruct, uint8_t *outarray){
+    struct tagLuaItem_float *p1 = (struct tagLuaItem_float*)luaStruct;
+    memcpy(outarray,&p1->luaProperties1,4);
+    memcpy(outarray+4,p1->label1,strlen(p1->label1)+1);
+    memcpy(outarray+4+(strlen(p1->label1)+1),&p1->luaProperties2,sizeof(p1->luaProperties2));
+    memcpy(outarray+4+(strlen(p1->label1)+1)+sizeof(p1->luaProperties2),p1->label2,strlen(p1->label2)+1);    
+}
+*/
+
 
 //sendCRSF param can take anytype of lua field settings
 uint8_t CRSF::sendCRSFparam(crsf_frame_type_e frame,uint8_t fieldchunk, crsf_value_type_e dataType, const void * luaData, uint8_t wholePacketSize)
@@ -550,7 +576,7 @@ void ICACHE_RAM_ATTR CRSF::sendTelemetryToTX(uint8_t *data)
 {
     if (data[CRSF_TELEMETRY_LENGTH_INDEX] > CRSF_PAYLOAD_SIZE_MAX)
     {
-        ERRLN("too large");
+        Serial.print("too large");
         return;
     }
 
@@ -610,18 +636,11 @@ void ICACHE_RAM_ATTR CRSF::JustSentRFpacket()
         CRSF::OpenTXsyncOffsetSafeMargin = 1000; // hard limit at no tune default
     }
 #endif
-    //DBGLN("%d, %d", CRSF::OpenTXsyncOffset, CRSF::OpenTXsyncOffsetSafeMargin / 10);
+    //Serial.print(CRSF::OpenTXsyncOffset);
+    // Serial.print(",");
+    // Serial.println(CRSF::OpenTXsyncOffsetSafeMargin / 10);
 }
 
-void CRSF::disableOpentxSync()
-{
-    OpentxSyncActive = false;
-}
-
-void CRSF::enableOpentxSync()
-{
-    OpentxSyncActive = true;
-}
 
 void ICACHE_RAM_ATTR CRSF::sendSyncPacketToTX() // in values in us.
 {
@@ -683,7 +702,7 @@ bool ICACHE_RAM_ATTR CRSF::ProcessPacket()
     if (CRSFstate == false)
     {
         CRSFstate = true;
-        DBGLN("CRSF UART Connected");
+        Serial.println("CRSF UART Connected");
 
 #ifdef FEATURE_OPENTX_SYNC_AUTOTUNE
         SyncWaitPeriodCounter = millis(); // set to begin wait for auto sync offset calculation
@@ -731,7 +750,7 @@ bool ICACHE_RAM_ATTR CRSF::ProcessPacket()
             RecvParameterUpdate();
             return true;
         }
-        DBGLN("Got Other Packet");        
+        Serial.println("Got Other Packet");        
         //GoodPktsCount++;        
     }
     return false;
@@ -900,12 +919,11 @@ void ICACHE_RAM_ATTR CRSF::handleUARTin()
                     {
                         //delayMicroseconds(50);
                         handleUARTout();
-                        RCdataCallback();
                     }
                 }
                 else
                 {
-                    DBGLN("UART CRC failure");
+                    Serial.println("UART CRC failure");
                     // cleanup input buffer
                     flush_port_input();
                     BadPktsCount++;
@@ -925,10 +943,8 @@ void ICACHE_RAM_ATTR CRSF::handleUARTout()
     static uint8_t sendingOffset = 0;
     uint8_t writeLength = 0;
 
-    if (OpentxSyncActive)
-    {
-        sendSyncPacketToTX(); // calculate mixer sync packet if needed
-    }
+    // calculate mixer sync packet if needed
+    sendSyncPacketToTX();
 
     // check if we have data in the output FIFO that needs to be written or a large package was split up and we need to send the second part
     if (sendingOffset > 0 || SerialOutFIFO.peek() > 0) {
@@ -1022,11 +1038,11 @@ bool CRSF::UARTwdt()
     {
         if (BadPktsCount >= GoodPktsCount)
         {
-            DBGLN("Too many bad UART RX packets!");
+            Serial.print("Too many bad UART RX packets! ");
 
             if (CRSFstate == true)
             {
-                DBGLN("CRSF UART Disconnected");
+                Serial.println("CRSF UART Disconnected");
 #ifdef FEATURE_OPENTX_SYNC_AUTOTUNE
                 SyncWaitPeriodCounter = now; // set to begin wait for auto sync offset calculation
                 CRSF::OpenTXsyncOffsetSafeMargin = 1000;
@@ -1040,7 +1056,9 @@ bool CRSF::UARTwdt()
             uint32_t UARTrequestedBaud = (UARTcurrentBaud == CRSF_OPENTX_FAST_BAUDRATE) ?
                 CRSF_OPENTX_SLOW_BAUDRATE : CRSF_OPENTX_FAST_BAUDRATE;
 
-            DBGLN("UART WDT: Switch to: %d baud", UARTrequestedBaud);
+            Serial.print("UART WDT: Switch to: ");
+            Serial.print(UARTrequestedBaud);
+            Serial.println(" baud");
 
             SerialOutFIFO.flush();
 #ifdef PLATFORM_ESP32
@@ -1068,7 +1086,10 @@ bool CRSF::UARTwdt()
 
             retval = true;
         }
-        DBGLN("UART STATS Bad:Good = %u:%u", BadPktsCount, GoodPktsCount);
+        Serial.print("UART STATS Bad:Good = ");
+        Serial.print(BadPktsCount);
+        Serial.print(":");
+        Serial.println(GoodPktsCount);
 
         UARTwdtLastChecked = now;
         GoodPktsCountResult = GoodPktsCount;
@@ -1083,7 +1104,7 @@ bool CRSF::UARTwdt()
 //RTOS task to read and write CRSF packets to the serial port
 void ICACHE_RAM_ATTR CRSF::ESP32uartTask(void *pvParameters)
 {
-    DBGLN("ESP32 CRSF UART LISTEN TASK STARTED");
+    Serial.println("ESP32 CRSF UART LISTEN TASK STARTED");
     CRSF::Port.begin(CRSF_OPENTX_FAST_BAUDRATE, SERIAL_8N1,
                      GPIO_PIN_RCSIGNAL_RX, GPIO_PIN_RCSIGNAL_TX,
                      false, 500);
