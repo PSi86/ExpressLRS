@@ -1,7 +1,6 @@
 #include "config.h"
 #include "common.h"
 #include "POWERMGNT.h"
-#include "logging.h"
 
 void
 TxConfig::Load()
@@ -13,7 +12,7 @@ TxConfig::Load()
     if (m_config.version != (uint32_t)(TX_CONFIG_VERSION | TX_CONFIG_MAGIC))
     {
         // If not, revert to defaults for this version
-        DBGLN("EEPROM version mismatch! Resetting to defaults...");
+        Serial.println("EEPROM version mismatch! Resetting to defaults...");
         SetDefaults();
     }
 
@@ -63,26 +62,6 @@ TxConfig::SetPower(uint8_t power)
     if (GetPower() != power)
     {
         m_model->power = power;
-        m_modified = true;
-    }
-}
-
-void
-TxConfig::SetDynamicPower(bool dynamicPower)
-{
-    if (GetDynamicPower() != dynamicPower)
-    {
-        m_model->dynamicPower = dynamicPower;
-        m_modified = true;
-    }
-}
-
-void
-TxConfig::SetBoostChannel(uint8_t boostChannel)
-{
-    if (GetBoostChannel() != boostChannel)
-    {
-        m_model->boostChannel = boostChannel;
         m_modified = true;
     }
 }
@@ -159,8 +138,6 @@ TxConfig::SetDefaults()
         SetRate(modParams->index);
         SetTlm(modParams->TLMinterval);
         SetPower(DefaultPowerEnum);
-        SetDynamicPower(0);
-        SetBoostChannel(0);
         SetSwitchMode(1);
         SetModelMatch(false);
     }
@@ -208,7 +185,7 @@ RxConfig::Load()
     if (m_config.version != (uint32_t)(RX_CONFIG_VERSION | RX_CONFIG_MAGIC))
     {
         // If not, revert to defaults for this version
-        DBGLN("EEPROM version mismatch! Resetting to defaults...");
+        Serial.println("EEPROM version mismatch! Resetting to defaults...");
         SetDefaults();
     }
 

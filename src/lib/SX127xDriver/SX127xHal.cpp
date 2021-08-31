@@ -1,7 +1,6 @@
 #ifndef UNIT_TEST
 
 #include "SX127xHal.h"
-#include "logging.h"
 
 SX127xHal *SX127xHal::instance = NULL;
 
@@ -24,22 +23,25 @@ void SX127xHal::end()
 
 void SX127xHal::init()
 {
-  DBGLN("Hal Init");
+  Serial.println("Hal Init");
 
 #if defined(GPIO_PIN_PA_ENABLE) && (GPIO_PIN_PA_ENABLE != UNDEF_PIN)
-    DBGLN("Use PA ctrl pin: %d", GPIO_PIN_PA_ENABLE);
+    Serial.print("Use PA ctrl pin: ");
+    Serial.println(GPIO_PIN_PA_ENABLE);
     pinMode(GPIO_PIN_PA_ENABLE, OUTPUT);
     digitalWrite(GPIO_PIN_PA_ENABLE, LOW);
 #endif
 
 #if defined(GPIO_PIN_TX_ENABLE) && (GPIO_PIN_TX_ENABLE != UNDEF_PIN)
-    DBGLN("Use TX pin: %d", GPIO_PIN_TX_ENABLE);
+    Serial.print("Use TX pin: ");
+    Serial.println(GPIO_PIN_TX_ENABLE);
     pinMode(GPIO_PIN_TX_ENABLE, OUTPUT);
     digitalWrite(GPIO_PIN_TX_ENABLE, LOW);
 #endif
 
 #if defined(GPIO_PIN_RX_ENABLE) && (GPIO_PIN_RX_ENABLE != UNDEF_PIN)
-    DBGLN("Use RX pin: %d", GPIO_PIN_RX_ENABLE);
+    Serial.print("Use RX pin: ");
+    Serial.println(GPIO_PIN_RX_ENABLE);
     pinMode(GPIO_PIN_RX_ENABLE, OUTPUT);
     digitalWrite(GPIO_PIN_RX_ENABLE, LOW);
 #endif

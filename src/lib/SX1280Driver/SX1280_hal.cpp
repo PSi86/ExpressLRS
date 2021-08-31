@@ -20,7 +20,6 @@ Modified and adapted by Alessandro Carcione for ELRS project
 #include "SX1280_Regs.h"
 #include "SX1280_hal.h"
 #include <SPI.h>
-#include "logging.h"
 
 SX1280Hal *SX1280Hal::instance = NULL;
 
@@ -42,7 +41,7 @@ void SX1280Hal::end()
 
 void SX1280Hal::init()
 {
-    DBGLN("Hal Init");
+    Serial.println("Hal Init");
 #if defined(GPIO_PIN_BUSY) && (GPIO_PIN_BUSY != UNDEF_PIN)
     pinMode(GPIO_PIN_BUSY, INPUT);
 #endif
@@ -52,25 +51,29 @@ void SX1280Hal::init()
     digitalWrite(GPIO_PIN_NSS, HIGH);
 
 #if defined(GPIO_PIN_PA_ENABLE) && (GPIO_PIN_PA_ENABLE != UNDEF_PIN)
-    DBGLN("Use PA ctrl pin: %d", GPIO_PIN_PA_ENABLE);
+    Serial.print("Use PA ctrl pin: ");
+    Serial.println(GPIO_PIN_PA_ENABLE);
     pinMode(GPIO_PIN_PA_ENABLE, OUTPUT);
     digitalWrite(GPIO_PIN_PA_ENABLE, LOW);
 #endif
 
 #if defined(GPIO_PIN_PA_SE2622L_ENABLE) && (GPIO_PIN_PA_SE2622L_ENABLE != UNDEF_PIN)
-    DBGLN("Use PA ctrl pin: %d", GPIO_PIN_PA_SE2622L_ENABLE);
+    Serial.print("Use PA ctrl pin: ");
+    Serial.println(GPIO_PIN_PA_SE2622L_ENABLE);
     pinMode(GPIO_PIN_PA_SE2622L_ENABLE, OUTPUT);
     digitalWrite(GPIO_PIN_PA_SE2622L_ENABLE, LOW);
 #endif
 
 #if defined(GPIO_PIN_TX_ENABLE) && (GPIO_PIN_TX_ENABLE != UNDEF_PIN)
-    DBGLN("Use TX pin: %d", GPIO_PIN_TX_ENABLE);
+    Serial.print("Use TX pin: ");
+    Serial.println(GPIO_PIN_TX_ENABLE);
     pinMode(GPIO_PIN_TX_ENABLE, OUTPUT);
     digitalWrite(GPIO_PIN_TX_ENABLE, LOW);
 #endif
 
 #if defined(GPIO_PIN_RX_ENABLE) && (GPIO_PIN_RX_ENABLE != UNDEF_PIN)
-    DBGLN("Use RX pin: %d", GPIO_PIN_RX_ENABLE);
+    Serial.print("Use RX pin: ");
+    Serial.println(GPIO_PIN_RX_ENABLE);
     pinMode(GPIO_PIN_RX_ENABLE, OUTPUT);
     digitalWrite(GPIO_PIN_RX_ENABLE, LOW);
 #endif
@@ -92,7 +95,7 @@ void SX1280Hal::init()
 #endif
 
 #ifdef PLATFORM_ESP8266
-    DBGLN("PLATFORM_ESP8266");
+    Serial.println("PLATFORM_ESP8266");
     SPI.begin();
     SPI.setBitOrder(MSBFIRST);
     SPI.setDataMode(SPI_MODE0);
@@ -100,7 +103,7 @@ void SX1280Hal::init()
 #endif
 
 #ifdef PLATFORM_STM32
-    DBGLN("Config SPI");
+    Serial.println("Config SPI");
     SPI.setMOSI(GPIO_PIN_MOSI);
     SPI.setMISO(GPIO_PIN_MISO);
     SPI.setSCLK(GPIO_PIN_SCK);
@@ -116,7 +119,7 @@ void SX1280Hal::init()
 
 void SX1280Hal::reset(void)
 {
-    DBGLN("SX1280 Reset");
+    Serial.println("SX1280 Reset");
     delay(50);
     digitalWrite(GPIO_PIN_RST, LOW);
     delay(50);
@@ -138,7 +141,7 @@ void SX1280Hal::reset(void)
 #endif
 
     //this->BusyState = SX1280_NOT_BUSY;
-    DBGLN("SX1280 Ready!");
+    Serial.println("SX1280 Ready!");
 }
 
 void ICACHE_RAM_ATTR SX1280Hal::WriteCommand(SX1280_RadioCommands_t command, uint8_t val)
@@ -302,7 +305,7 @@ bool ICACHE_RAM_ATTR SX1280Hal::WaitOnBusy()
     {
         if ((micros() - startTime) > wtimeoutUS)
         {
-            //DBGLN("TO");
+            //Serial.println("TO");
             return false;
         }
         else

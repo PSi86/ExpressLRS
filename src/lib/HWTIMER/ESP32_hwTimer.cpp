@@ -1,7 +1,6 @@
 
 #ifdef PLATFORM_ESP32
 #include "ESP32_hwTimer.h"
-#include "logging.h"
 
 static hw_timer_t *timer = NULL;
 static portMUX_TYPE isrMutex = portMUX_INITIALIZER_UNLOCKED;
@@ -30,7 +29,7 @@ void ICACHE_RAM_ATTR hwTimer::init()
         timer = timerBegin(0, (APB_CLK_FREQ / 1000000), true); // us timer
         timerAttachInterrupt(timer, &callback, true);
         timerAlarmWrite(timer, HWtimerInterval, true);
-        DBGLN("hwTimer Init");
+        Serial.println("hwTimer Init");
     }
 }
 
@@ -41,7 +40,7 @@ void ICACHE_RAM_ATTR hwTimer::resume()
         running = true;
         timerAlarmWrite(timer, HWtimerInterval, true);
         timerAlarmEnable(timer);
-        DBGLN("hwTimer resume");
+        Serial.println("hwTimer resume");
     }
 }
 
@@ -51,7 +50,7 @@ void ICACHE_RAM_ATTR hwTimer::stop()
     {
         running = false;
         timerAlarmDisable(timer);
-        DBGLN("hwTimer stop");
+        Serial.println("hwTimer stop");
     }
 }
 
@@ -60,7 +59,8 @@ void ICACHE_RAM_ATTR hwTimer::updateInterval(uint32_t time)
     HWtimerInterval = time;
     if (timer)
     {
-        DBGLN("hwTimer interval: %d", time);
+        Serial.print("hwTimer interval: ");
+        Serial.println(time);
         timerAlarmWrite(timer, HWtimerInterval, true);
     }
 }

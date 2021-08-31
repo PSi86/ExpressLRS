@@ -3,7 +3,6 @@
 
 #if DAC_IN_USE && defined(DAC_I2C_ADDRESS)
 #include "helpers.h"
-#include "logging.h"
 #include <Wire.h>
 
 typedef struct {
@@ -86,7 +85,7 @@ dac_lut_s LUT[] =
 
 void DAC::init()
 {
-    DBGLN("Init DAC Driver");
+    Serial.println("Init DAC Driver");
 
     Wire.setSDA(GPIO_PIN_SDA); // set is needed or it wont work :/
     Wire.setSCL(GPIO_PIN_SCL);
@@ -119,7 +118,7 @@ void DAC::setVoltageMV(uint32_t voltsMV)
     uint8_t ScaledVolts = map(voltsMV, 0, DAC_REF_VCC, 0, 255);
     setVoltageRegDirect(ScaledVolts);
     m_currVoltageMV = voltsMV;
-    DBGLN("DAC Voltage %dmV", m_currVoltageMV);
+    Serial.println(m_currVoltageMV);
 }
 
 void DAC::setVoltageRegDirect(uint8_t voltReg)
