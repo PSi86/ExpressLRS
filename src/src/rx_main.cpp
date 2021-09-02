@@ -202,10 +202,12 @@ static uint8_t minLqForChaos()
     const uint8_t interval = ExpressLRS_currAirRate_Modparams->FHSShopInterval;
     return interval * ((interval * numfhss + 99) / (interval * numfhss));
 }
+
 void ICACHE_RAM_ATTR getRFlinkInfo()
 {
     int32_t rssiDBM0 = LPF_UplinkRSSI0.SmoothDataINT;
     int32_t rssiDBM1 = LPF_UplinkRSSI1.SmoothDataINT;
+
     switch (antenna) {
         case 0:
             rssiDBM0 = LPF_UplinkRSSI0.update(Radio.LastPacketRSSI);
@@ -458,6 +460,7 @@ void ICACHE_RAM_ATTR updatePhaseLock()
 void ICACHE_RAM_ATTR HWtimerCallbackTick() // this is 180 out of phase with the other callback, occurs mid-packet reception
 {
     updatePhaseLock();
+    getRFlinkInfo();
     NonceRX++;
 
     // if (!alreadyTLMresp && !alreadyFHSS && !LQCalc.currentIsSet()) // packet timeout AND didn't DIDN'T just hop or send TLM
@@ -585,8 +588,14 @@ void LostConnection()
     //OffsetDx = 0; //value is calculated in UpdatePhaseLock() why manipulate it?
     //RawOffset = 0; //value is calculated in UpdatePhaseLock() why manipulate it?
     GotConnectionMillis = 0;
+    
     uplinkLQ = 0;
     LQCalc.reset();
+    
+    Radio.LastPacketRSSI = ExpressLRS_currAirRate_RFperfParams->RXsensitivity;
+    LPF_UplinkRSSI0.init(ExpressLRS_currAirRate_RFperfParams->RXsensitivity); // TEST
+    LPF_UplinkRSSI1.init(ExpressLRS_currAirRate_RFperfParams->RXsensitivity); // TEST
+    
     LPF_Offset.init(0); // necessary? (but does not hurt much)
     LPF_OffsetDx.init(0); // necessary? but does not hurt much)
     PhaseLockCounter = 0;
@@ -720,7 +729,7 @@ void ICACHE_RAM_ATTR ProcessRFPacket()
 
     LastValidPacket = now;
 
-    getRFlinkInfo();
+    //getRFlinkInfo(); // now done in Tick timercallback
 
     switch (type)
     {
@@ -1057,6 +1066,8 @@ static void setupRadio()
     ExpressLRS_currAirRate_Modparams = get_elrs_airRateConfig(RATE_DEFAULT); // Initialize var: caused crash on ESP in SetRFLinkRate() where currAirRate is compared
     ExpressLRS_currAirRate_RFperfParams = get_elrs_RFperfParams(RATE_DEFAULT); // Initialize var: caused crash on ESP in SetRFLinkRate() where currAirRate is compared
 
+    Radio.LastPacketRSSI = ExpressLRS_currAirRate_RFperfParams->RXsensitivity;
+
     SetRFLinkRate(RATE_DEFAULT);
     RFmodeCycleMultiplier = 1;
 }
@@ -1125,15 +1136,13 @@ static void cycleRfMode(unsigned long now)
         RFmodeLastCycled = now;
         LastSyncPacket = now;           // reset this variable
         SetRFLinkRate(scanIndex % RATE_MAX); // switch between rates
-        SendLinkStatstoFCintervalLastSent = now;
         LQCalc.reset();
         // Display the current air rate to the user as an indicator something is happening
-        INFOLN("%d", ExpressLRS_currAirRate_Modparams->interval);
+        DBGLN("%d", ExpressLRS_currAirRate_Modparams->interval);
         scanIndex++;
         getRFlinkInfo();
         crsf.sendLinkStatisticsToFC();
-        delay(100);
-        crsf.sendLinkStatisticsToFC(); // need to send twice, not sure why, seems like a BF bug?
+        SendLinkStatstoFCintervalLastSent = now - SEND_LINK_STATS_TO_FC_INTERVAL;
         Radio.RXnb();
 
         // Switch to FAST_SYNC if not already in it (won't be if was just connected)
@@ -1218,7 +1227,7 @@ void loop()
         RFmodeLastCycled = now;         // reset this variable to stop rf mode switching and add extra time
         DBGLN("Air rate change req via sync");
         crsf.sendLinkStatisticsToFC();
-        crsf.sendLinkStatisticsToFC(); // need to send twice, not sure why, seems like a BF bug?
+        SendLinkStatstoFCintervalLastSent = now - SEND_LINK_STATS_TO_FC_INTERVAL;
     }
 
     if (connectionState == tentative && (now - LastSyncPacket > ExpressLRS_currAirRate_RFperfParams->RFmodeCycleAddtionalTime))
@@ -1246,13 +1255,13 @@ void loop()
     {
         if (connectionState == disconnected)
         {
-            getRFlinkInfo();
+            getRFlinkInfo(); // Timer not running if disconnected -> manually update here
         }
-        if (connectionState != disconnected)
-        {
+        //if (connectionState != disconnected)
+        //{
             crsf.sendLinkStatisticsToFC();
             SendLinkStatstoFCintervalLastSent = now;
-        }
+        //}
     }
 
     if (now > (buttonLastSampled + BUTTON_SAMPLE_INTERVAL))
