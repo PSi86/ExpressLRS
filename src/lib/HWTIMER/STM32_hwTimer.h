@@ -16,6 +16,7 @@ public:
     static volatile int32_t PhaseShift;
     static volatile int32_t FreqOffset;
     static volatile uint32_t PauseDuration;
+    static volatile uint32_t TicksPerUs;
     static bool running;
     static bool alreadyInit;
 

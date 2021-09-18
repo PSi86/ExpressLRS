@@ -32,7 +32,7 @@ public:
 
     inline bool resultValid()
     {
-        return gotExtEvent && gotIntEvent;
+        return (gotExtEvent && gotIntEvent);
     }
     
     // Check resultValid() before using getResult() return value

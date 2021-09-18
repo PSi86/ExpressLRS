@@ -11,6 +11,7 @@ volatile bool hwTimer::isTick = false;
 volatile int32_t hwTimer::PhaseShift = 0;
 volatile int32_t hwTimer::FreqOffset = 0;
 volatile uint32_t hwTimer::PauseDuration = 0;
+volatile uint32_t hwTimer::TicksPerUs = 72;
 bool hwTimer::running = false;
 bool hwTimer::alreadyInit = false;
 
@@ -34,6 +35,8 @@ void hwTimer::init()
         MyTim->setPrescaleFactor(MyTim->getTimerClkFreq() / 1000000); // 1us per tick
         MyTim->setOverflow(hwTimer::HWtimerInterval >> 1, TICK_FORMAT);
 #else
+        TicksPerUs = MyTim->getTimerClkFreq() / 1000000; // Ticks per us
+        //MyTim->setPrescaleFactor(MyTim->getTimerClkFreq() / 200000); // 5 ticks per microsecond would match the esp8266 timer scaling and we could use the same math here as in the other library
         MyTim->setOverflow(hwTimer::HWtimerInterval >> 1, MICROSEC_FORMAT); // 22(50Hz) to 3(500Hz) scaler
 #endif
         MyTim->setPreloadEnable(false);
@@ -89,11 +92,13 @@ void hwTimer::resetFreqOffset()
 void hwTimer::incFreqOffset()
 {
     FreqOffset++;
+    //FreqOffset=FreqOffset+12; // Simulate esp timer resolution
 }
 
 void hwTimer::decFreqOffset()
 {
     FreqOffset--;
+    //FreqOffset=FreqOffset-12; // Simulate esp timer resolution
 }
 
 void hwTimer::phaseShift(int32_t newPhaseShift)
@@ -122,7 +127,10 @@ void hwTimer::callback(void)
 #else
         MyTim->setOverflow((hwTimer::HWtimerInterval >> 1), MICROSEC_FORMAT);
         uint32_t adjustedInterval = MyTim->getOverflow(TICK_FORMAT) + FreqOffset;
-        MyTim->setOverflow(adjustedInterval, TICK_FORMAT);
+        MyTim->setOverflow(adjustedInterval, TICK_FORMAT); 
+        
+        //MyTim->setOverflow(((hwTimer::HWtimerInterval >> 1) * TicksPerUs) + FreqOffset, TICK_FORMAT); // TEST
+        
         hwTimer::callbackTick();
 #endif
     }
@@ -135,6 +143,9 @@ void hwTimer::callback(void)
         MyTim->setOverflow((hwTimer::HWtimerInterval >> 1) + hwTimer::PhaseShift, MICROSEC_FORMAT);
         uint32_t adjustedInterval = MyTim->getOverflow(TICK_FORMAT) + FreqOffset;
         MyTim->setOverflow(adjustedInterval, TICK_FORMAT);
+
+        //MyTim->setOverflow((((hwTimer::HWtimerInterval >> 1) + hwTimer::PhaseShift) * TicksPerUs) + FreqOffset, TICK_FORMAT); // TEST
+
         hwTimer::PhaseShift = 0;
         hwTimer::callbackTock();
 #endif
